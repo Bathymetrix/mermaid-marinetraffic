@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mermaid-marinetraffic",
         description="Prepare MERMAID position histories for MarineTraffic.",
     )
-    parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("-v", "--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", metavar="command")
     winnow_gps.add_parser(commands)
     return parser

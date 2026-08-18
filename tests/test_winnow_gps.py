@@ -16,9 +16,10 @@ def test_top_level_help_lists_winnow_gps(capsys: pytest.CaptureFixture[str]) -> 
     assert "winnow_gps" in capsys.readouterr().out
 
 
-def test_top_level_version(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("flag", ["-v", "--version"])
+def test_top_level_version(flag: str, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match="0"):
-        cli.main(["--version"])
+        cli.main([flag])
 
     assert capsys.readouterr().out.strip() == __version__
 
