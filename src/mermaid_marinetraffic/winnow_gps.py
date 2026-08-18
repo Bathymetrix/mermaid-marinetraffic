@@ -209,48 +209,111 @@ class GPSKMLWinnower:
     def process_file(
         self, input_path: Path, output_path: Path, source_type: str, source_tag: str
     ) -> Path:
-        parser = {"automaid": self.parse_kml, "earthscopeoceans": self.parse_txt, "mermaid-records": self.parse_jsonl}[source_type]
-        station, records = parser(input_path)
+        station, records = self.parse_source(input_path, source_type)
         selected = self.select_recent_unique(records)
         final_output = self.resolve_output_path(output_path, station, source_tag)
         self.write_records_to_kml(selected, station, final_output, source_type, str(input_path))
         print(f"Station code: {station}\nInput GPS records: {len(records)}\nWritten placemarks: {len(selected)}\nOutput: {final_output}")
         return final_output
 
+    def parse_source(
+        self, input_path: Path, source_type: str
+    ) -> tuple[str, list[PositionRecord]]:
+        parser = {
+            "automaid": self.parse_kml,
+            "earthscopeoceans": self.parse_txt,
+            "mermaid-records": self.parse_jsonl,
+        }[source_type]
+        return parser(input_path)
 
-def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = subparsers.add_parser("winnow_gps", help="Winnow recent GPS points and write import-ready KML.", description="Winnow one local GPS source to recent unique points.")
-    configure_parser(parser)
-    parser.set_defaults(handler=run)
+    def process_directory(
+        self, input_directory: Path, output_directory: Path, source_type: str, source_tag: str
+    ) -> list[Path]:
+        if not input_directory.is_dir():
+            raise RuntimeError(f"Not a directory: {input_directory}")
+        patterns = {
+            "automaid": "position.kml",
+            "earthscopeoceans": "*_all.txt",
+            "mermaid-records": "log_gps_records.*.jsonl",
+        }
+        parsed_inputs = [
+            (input_path, *self.parse_source(input_path, source_type))
+            for input_path in sorted(input_directory.rglob(patterns[source_type]))
+        ]
+        if not parsed_inputs:
+            raise RuntimeError(f"No matching {source_type} files under {input_directory}")
+
+        planned_outputs: set[Path] = set()
+        for _, station, _ in parsed_inputs:
+            output_path = self.resolve_output_path(output_directory, station, source_tag)
+            if output_path in planned_outputs:
+                raise RuntimeError(f"Multiple inputs would write {output_path}")
+            planned_outputs.add(output_path)
+
+        outputs: list[Path] = []
+        for input_path, station, records in parsed_inputs:
+            output_path = self.resolve_output_path(output_directory, station, source_tag)
+            selected = self.select_recent_unique(records)
+            self.write_records_to_kml(selected, station, output_path, source_type, str(input_path))
+            print(f"Station code: {station}\nInput GPS records: {len(records)}\nWritten placemarks: {len(selected)}\nOutput: {output_path}")
+            outputs.append(output_path)
+        return outputs
 
 
-def configure_parser(parser: argparse.ArgumentParser) -> None:
+def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    file_parser = subparsers.add_parser("winnow_gps_file", help="Winnow one GPS file and write import-ready KML.", description="Winnow one local GPS source to recent unique points.")
+    configure_parser(file_parser, input_kind="file")
+    file_parser.set_defaults(handler=run_file)
+    directory_parser = subparsers.add_parser("winnow_gps_dir", help="Recursively winnow GPS files into a flat KML directory.", description="Recursively winnow one local GPS source family into a flat output directory.")
+    configure_parser(directory_parser, input_kind="directory")
+    directory_parser.set_defaults(handler=run_directory)
+
+
+def configure_parser(parser: argparse.ArgumentParser, input_kind: str) -> None:
     sources = parser.add_mutually_exclusive_group(required=True)
-    sources.add_argument("--kml", type=Path, metavar="FILE", help="automaid position.kml file")
-    sources.add_argument("--txt", type=Path, metavar="FILE", help="EarthScopeOceans.org SOM text file")
-    sources.add_argument("--jsonl", type=Path, metavar="FILE", help="mermaid-records GPS JSONL file")
+    metavar = "FILE" if input_kind == "file" else "DIR"
+    location = "file" if input_kind == "file" else "directory"
+    sources.add_argument("--kml", type=Path, metavar=metavar, help=f"automaid {location}")
+    sources.add_argument("--txt", type=Path, metavar=metavar, help=f"EarthScopeOceans.org SOM {location}")
+    sources.add_argument("--jsonl", type=Path, metavar=metavar, help=f"mermaid-records GPS JSONL {location}")
     parser.add_argument("-o", "--output", type=Path, help="Output file or directory (default: $MERMAID/marinetraffic)")
     parser.add_argument("--limit", type=int, default=50, help="Number of most recent points to keep")
 
 
-def run(args: argparse.Namespace) -> None:
-    winnower = GPSKMLWinnower(limit=args.limit)
-    output_path = args.output or winnower.default_output_directory()
+def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
     for input_path, source_type, source_tag in (
         (args.kml, "automaid", "kml"),
         (args.txt, "earthscopeoceans", "txt"),
         (args.jsonl, "mermaid-records", "jsonl"),
     ):
         if input_path is not None:
-            winnower.process_file(input_path, output_path, source_type, source_tag)
-            return
+            return input_path, source_type, source_tag
     raise RuntimeError("No input source selected")
 
 
+def run_file(args: argparse.Namespace) -> None:
+    winnower = GPSKMLWinnower(limit=args.limit)
+    output_path = args.output or winnower.default_output_directory()
+    input_path, source_type, source_tag = selected_source(args)
+    winnower.process_file(input_path, output_path, source_type, source_tag)
+
+
+def run_directory(args: argparse.Namespace) -> None:
+    winnower = GPSKMLWinnower(limit=args.limit)
+    output_path = args.output or winnower.default_output_directory()
+    if output_path.suffix.lower() == ".kml":
+        raise SystemExit("winnow_gps_dir requires -o to be a directory, not a .kml file.")
+    input_path, source_type, source_tag = selected_source(args)
+    outputs = winnower.process_directory(input_path, output_path, source_type, source_tag)
+    print(f"Processed {len(outputs)} files.")
+
+
 def main(argv: Sequence[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="mermaid-marinetraffic winnow_gps", description="Winnow one local GPS source to recent unique points.")
-    configure_parser(parser)
-    run(parser.parse_args(argv))
+    parser = argparse.ArgumentParser(prog="mermaid-marinetraffic")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    add_parsers(subparsers)
+    args = parser.parse_args(argv)
+    args.handler(args)
 
 
 if __name__ == "__main__":

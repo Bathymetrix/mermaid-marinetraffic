@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-v", "--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", metavar="command")
-    winnow_gps.add_parser(commands)
+    winnow_gps.add_parsers(commands)
     return parser
 
 

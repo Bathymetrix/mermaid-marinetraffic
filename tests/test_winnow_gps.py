@@ -14,20 +14,22 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def test_top_level_help_and_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--help"])
-    assert "winnow_gps" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "winnow_gps_file" in output
+    assert "winnow_gps_dir" in output
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--version"])
     assert capsys.readouterr().out.strip() == __version__
 
 
-def test_winnow_gps_requires_exactly_one_local_source(capsys: pytest.CaptureFixture[str]) -> None:
+def test_winnow_gps_file_requires_exactly_one_local_source(capsys: pytest.CaptureFixture[str]) -> None:
     parser = cli.build_parser()
     with pytest.raises(SystemExit, match="2"):
-        parser.parse_args(["winnow_gps"])
+        parser.parse_args(["winnow_gps_file"])
     with pytest.raises(SystemExit, match="2"):
-        parser.parse_args(["winnow_gps", "--kml", "a.kml", "--txt", "a.txt"])
+        parser.parse_args(["winnow_gps_file", "--kml", "a.kml", "--txt", "a.txt"])
     with pytest.raises(SystemExit, match="0"):
-        cli.main(["winnow_gps", "--help"])
+        cli.main(["winnow_gps_file", "--help"])
     output = capsys.readouterr().out
     assert all(option in output for option in ("--kml FILE", "--txt FILE", "--jsonl FILE"))
     assert "--som-all" not in output and "--path" not in output
@@ -62,7 +64,7 @@ def test_default_filenames_keep_source_option_tags() -> None:
 )
 def test_each_local_source_writes_uniform_kml(tmp_path: Path, option: str, fixture_name: str, source_type: str) -> None:
     output = tmp_path / "output.kml"
-    cli.main(["winnow_gps", option, str(FIXTURES / fixture_name), "-o", str(output), "--limit", "3"])
+    cli.main(["winnow_gps_file", option, str(FIXTURES / fixture_name), "-o", str(output), "--limit", "3"])
     root = ET.parse(output).getroot()
     namespace = {"k": winnow_gps.KML_NS}
     placemarks = root.findall(".//k:Folder/k:Placemark", namespace)
@@ -79,3 +81,14 @@ def test_jsonl_parser_accepts_only_fix_position_records() -> None:
     assert records[0].timestamp == datetime(2018, 6, 13, 9, 49, 48)
     assert records[0].latitude == "43.682650"
     assert records[0].longitude == "7.319400"
+
+
+def test_winnow_gps_dir_recurses_and_writes_flat_output(tmp_path: Path) -> None:
+    input_file = tmp_path / "processed" / "452.020-P-21" / "position.kml"
+    input_file.parent.mkdir(parents=True)
+    input_file.write_bytes((FIXTURES / "P0021_position.kml").read_bytes())
+    output_directory = tmp_path / "output"
+
+    cli.main(["winnow_gps_dir", "--kml", str(tmp_path / "processed"), "-o", str(output_directory), "--limit", "2"])
+
+    assert list(output_directory.iterdir()) == [output_directory / "recent_gps_P0021_src-kml.kml"]

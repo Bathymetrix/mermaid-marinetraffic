@@ -7,6 +7,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## Unreleased
 
 ### Changed
+- Split GPS processing into explicit `winnow_gps_file` and recursive `winnow_gps_dir` commands.
 - Replaced positional, batch, and online GPS inputs with required local `--kml`, `--txt`, and `--jsonl` sources.
 - Unified all source parsers into shared deduplication, recent-N selection, and KML writing; KML provenance now identifies `automaid`, EarthScopeOceans.org, or `mermaid-records`.
 - Simplified repository instructions, documentation, and local-file ignore rules.

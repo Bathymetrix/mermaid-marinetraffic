@@ -9,7 +9,7 @@
 
 ## Compatibility
 
-- `winnow_gps` accepts exactly one local input source: `--kml FILE`, `--txt FILE`, or `--jsonl FILE`.
+- `winnow_gps_file` accepts exactly one local input source: `--kml FILE`, `--txt FILE`, or `--jsonl FILE`. `winnow_gps_dir` recursively processes the corresponding source family from one directory.
 - Preserve established output filenames, placemark names, and KML provenance metadata unless a task explicitly changes them.
 - Update `README.md` and focused tests when user-visible CLI or output behavior changes.
 
