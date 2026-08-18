@@ -7,6 +7,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## Unreleased
 
 ### Changed
+- Replaced positional, batch, and online GPS inputs with required local `--kml`, `--txt`, and `--jsonl` sources.
+- Unified all source parsers into shared deduplication, recent-N selection, and KML writing; KML provenance now identifies `automaid`, EarthScopeOceans.org, or `mermaid-records`.
 - Simplified repository instructions, documentation, and local-file ignore rules.
 - Added focused tests for deterministic KML winnowing behavior.
 - Renamed the installable package and CLI to `mermaid-marinetraffic` with the `winnow_gps` command.

@@ -1,40 +1,36 @@
-#!/usr/bin/env python3
-"""Core winnower logic for MERMAID KML positional metadata."""
+"""Winnow local MERMAID GPS position sources into import-ready KML."""
 
 from __future__ import annotations
 
 import argparse
 import heapq
+import json
 import os
 import re
-import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
-from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from html.parser import HTMLParser
 from pathlib import Path
 
 KML_NS = "http://www.opengis.net/kml/2.2"
 GX_NS = "http://www.google.com/kml/ext/2.2"
 NS = {"k": KML_NS}
-SOM_DEFAULT_URL = "https://geoweb.princeton.edu/people/simons/SOM/"
 DEFAULT_OUTPUT_ENVIRONMENT_VARIABLE = "MERMAID"
 DEFAULT_OUTPUT_SUBDIRECTORY = "marinetraffic"
 
 
-class LinkExtractor(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.links: list[str] = []
+@dataclass(frozen=True)
+class PositionRecord:
+    """One parsed GPS position, independent of its input source."""
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "a":
-            return
-        for key, value in attrs:
-            if key == "href" and value:
-                self.links.append(value)
+    timestamp: datetime
+    latitude: str
+    longitude: str
+
+    @property
+    def lat_lon(self) -> tuple[str, str]:
+        return self.latitude, self.longitude
 
 
 class GPSKMLWinnower:
@@ -55,20 +51,10 @@ class GPSKMLWinnower:
     def extract_station_code(document_name: str) -> str:
         if "-" not in document_name:
             raise ValueError(f"Document name missing '-': {document_name!r}")
-
-        after_first_dash = document_name.split("-", 1)[1]
-        alnum = "".join(ch for ch in after_first_dash if ch.isalnum())
+        alnum = "".join(ch for ch in document_name.split("-", 1)[1] if ch.isalnum())
         if len(alnum) < 2:
             raise ValueError(f"Cannot derive station code from: {document_name!r}")
-
-        first = alnum[0]
-        last = alnum[-1]
-        middle = alnum[1:-1]
-        zeros_needed = 5 - (1 + len(middle) + 1)
-        if zeros_needed < 0:
-            middle = middle[-3:]
-            zeros_needed = 0
-        return f"{first}{'0' * zeros_needed}{middle}{last}"
+        return f"{alnum[0]}{'0' * max(0, 5 - len(alnum))}{alnum[1:-1][-3:]}{alnum[-1]}"
 
     @staticmethod
     def parse_point_datetime(name_text: str) -> datetime:
@@ -84,11 +70,24 @@ class GPSKMLWinnower:
         return datetime.strptime(text.strip(), "%d-%b-%Y %H:%M:%S")
 
     @staticmethod
+    def parse_record_datetime(text: str) -> datetime:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
+
+    @staticmethod
     def parse_lat_lon(coords_text: str) -> tuple[str, str]:
-        parts = [p.strip() for p in coords_text.strip().split(",")]
+        parts = [part.strip() for part in coords_text.strip().split(",")]
         if len(parts) < 2:
             raise ValueError(f"Invalid coordinates text: {coords_text!r}")
-        return parts[0], parts[1]
+        return parts[1], parts[0]
+
+    @staticmethod
+    def parse_degrees_minutes(text: str) -> str:
+        match = re.fullmatch(r"\s*([NSEW])(\d+)deg(\d+(?:\.\d+)?)mn\s*", text)
+        if match is None:
+            raise ValueError(f"Invalid degrees/minutes coordinate: {text!r}")
+        direction, degrees, minutes = match.groups()
+        value = int(degrees) + float(minutes) / 60
+        return f"{-value if direction in {'S', 'W'} else value:.6f}"
 
     @staticmethod
     def get_text(el: ET.Element | None) -> str:
@@ -96,21 +95,14 @@ class GPSKMLWinnower:
 
     @staticmethod
     def default_output_directory() -> Path:
-        """Return the default output directory configured by ``MERMAID``."""
         mermaid_root = os.environ.get(DEFAULT_OUTPUT_ENVIRONMENT_VARIABLE)
         if not mermaid_root:
-            raise RuntimeError(
-                "Set MERMAID or provide -o/--output to choose an output location."
-            )
+            raise RuntimeError("Set MERMAID or provide -o/--output to choose an output location.")
         return Path(mermaid_root) / DEFAULT_OUTPUT_SUBDIRECTORY
 
     @staticmethod
-    def resolve_output_path(
-        input_path: Path, station: str, output_path: Path | None, source_tag: str
-    ) -> Path:
+    def resolve_output_path(output_path: Path, station: str, source_tag: str) -> Path:
         default_name = GPSKMLWinnower.build_default_output_filename(station, source_tag)
-        if output_path is None:
-            return input_path.parent / default_name
         if output_path.exists() and output_path.is_dir():
             return output_path / default_name
         if output_path.suffix.lower() == ".kml":
@@ -119,328 +111,144 @@ class GPSKMLWinnower:
         output_path.mkdir(parents=True, exist_ok=True)
         return output_path / default_name
 
-    def select_recent_unique(
-        self, records: list[tuple[datetime, tuple[str, str], object]]
-    ) -> list[tuple[datetime, tuple[str, str], object]]:
-        deduped: list[tuple[datetime, tuple[str, str], object]] = []
-        prev_key: tuple[datetime, tuple[str, str]] | None = None
-        for dt, lat_lon, raw_item in records:
-            key = (dt, lat_lon)
-            if key == prev_key:
-                continue
-            deduped.append((dt, lat_lon, raw_item))
-            prev_key = key
-        return heapq.nlargest(self.limit, deduped, key=lambda x: x[0])
+    def select_recent_unique(self, records: list[PositionRecord]) -> list[PositionRecord]:
+        deduped: list[PositionRecord] = []
+        previous_key: tuple[datetime, tuple[str, str]] | None = None
+        for record in records:
+            key = record.timestamp, record.lat_lon
+            if key != previous_key:
+                deduped.append(record)
+            previous_key = key
+        return heapq.nlargest(self.limit, deduped, key=lambda record: record.timestamp)
 
-    def write_records_to_kml(
-        self,
-        records: list[tuple[datetime, tuple[str, str], object]],
-        station: str,
-        output_path: Path,
-        document_name: str | None = None,
-        source_type: str = "unknown",
-        source_ref: str = "",
-    ) -> None:
-        out_root = ET.Element(f"{{{KML_NS}}}kml")
-        out_doc = ET.SubElement(out_root, f"{{{KML_NS}}}Document")
-
-        out_doc_name = ET.SubElement(out_doc, f"{{{KML_NS}}}name")
-        out_doc_name.text = document_name or station
-        out_desc = ET.SubElement(out_doc, f"{{{KML_NS}}}description")
-        out_desc.text = f"Generated from {source_type} input"
-
-        ext = ET.SubElement(out_doc, f"{{{KML_NS}}}ExtendedData")
-        metadata = {
-            "source_type": source_type,
-            "source_ref": source_ref,
-            "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "limit": str(self.limit),
-        }
-        for key, value in metadata.items():
-            data = ET.SubElement(ext, f"{{{KML_NS}}}Data", {"name": key})
-            val = ET.SubElement(data, f"{{{KML_NS}}}value")
-            val.text = value
-
-        out_folder = ET.SubElement(out_doc, f"{{{KML_NS}}}Folder", {"id": "GPS points"})
-        out_folder_name = ET.SubElement(out_folder, f"{{{KML_NS}}}name")
-        out_folder_name.text = "GPS points"
-
-        for dt, lat_lon, raw_item in records:
-            if isinstance(raw_item, ET.Element):
-                cloned = deepcopy(raw_item)
-                out_name = cloned.find("k:name", NS)
-                if out_name is None:
-                    out_name = ET.SubElement(cloned, f"{{{KML_NS}}}name")
-                out_name.text = f"{station} - {self.format_output_datetime(dt)}"
-                out_folder.append(cloned)
-                continue
-
-            placemark = ET.SubElement(out_folder, f"{{{KML_NS}}}Placemark")
-            out_name = ET.SubElement(placemark, f"{{{KML_NS}}}name")
-            out_name.text = f"{station} - {self.format_output_datetime(dt)}"
-            visibility = ET.SubElement(placemark, f"{{{KML_NS}}}visibility")
-            visibility.text = "1"
-            style_url = ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl")
-            style_url.text = "#markerStyle2"
-            point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
-            coords = ET.SubElement(point, f"{{{KML_NS}}}coordinates")
-            coords.text = f"{lat_lon[1]},{lat_lon[0]},0"
-
-        ET.indent(out_root, space="    ")
-        ET.ElementTree(out_root).write(output_path, encoding="UTF-8", xml_declaration=True)
-
-    def process_kml_file(self, input_path: Path, output_path: Path | None = None) -> Path:
-        tree = ET.parse(input_path)
-        root = tree.getroot()
-
+    def parse_kml(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
+        root = ET.parse(input_path).getroot()
         document = root.find("k:Document", NS)
         if document is None:
             raise RuntimeError("No <Document> found")
-
-        doc_name_el = document.find("k:name", NS)
-        document_name = self.get_text(doc_name_el)
-        if not document_name:
-            raise RuntimeError("No document <name> found")
-
-        station = self.extract_station_code(document_name)
+        document_name = self.get_text(document.find("k:name", NS))
         gps_folder = document.find("k:Folder[@id='GPS points']", NS)
-        if gps_folder is None:
-            raise RuntimeError("No <Folder id='GPS points'> found")
+        if not document_name or gps_folder is None:
+            raise RuntimeError("KML lacks document name or GPS points folder")
+        records = []
+        for placemark in gps_folder.findall("k:Placemark", NS):
+            name = self.get_text(placemark.find("k:name", NS))
+            coordinates = self.get_text(placemark.find(".//k:Point/k:coordinates", NS))
+            if name and coordinates:
+                latitude, longitude = self.parse_lat_lon(coordinates)
+                records.append(PositionRecord(self.parse_point_datetime(name), latitude, longitude))
+        return self.extract_station_code(document_name), records
 
-        placemarks = gps_folder.findall("k:Placemark", NS)
-        records: list[tuple[datetime, tuple[str, str], object]] = []
-        for placemark in placemarks:
-            raw_name = self.get_text(placemark.find("k:name", NS))
-            raw_coords = self.get_text(placemark.find(".//k:Point/k:coordinates", NS))
-            if not raw_name or not raw_coords:
+    def parse_txt(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
+        station: str | None = None
+        records: list[PositionRecord] = []
+        for raw_line in input_path.read_text(encoding="utf-8").splitlines():
+            parts = raw_line.split()
+            if not parts:
                 continue
-            dt = self.parse_point_datetime(raw_name)
-            lat_lon = self.parse_lat_lon(raw_coords)
-            records.append((dt, lat_lon, placemark))
+            if len(parts) < 5:
+                raise ValueError(f"Invalid EarthScopeOceans.org SOM row: {raw_line!r}")
+            if station is not None and parts[0] != station:
+                raise ValueError("EarthScopeOceans.org SOM file contains multiple stations")
+            station = parts[0]
+            records.append(PositionRecord(self.parse_som_datetime(f"{parts[1]} {parts[2]}"), parts[3], parts[4]))
+        if station is None:
+            raise RuntimeError("No EarthScopeOceans.org SOM records found")
+        return station, records
 
+    def parse_jsonl(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
+        station: str | None = None
+        records: list[PositionRecord] = []
+        for line_number, raw_line in enumerate(input_path.read_text(encoding="utf-8").splitlines(), 1):
+            if not raw_line.strip():
+                continue
+            entry = json.loads(raw_line)
+            if entry.get("gps_record_kind") != "fix_position":
+                continue
+            raw_values = entry.get("raw_values")
+            serial, instrument_id = entry.get("instrument_serial"), entry.get("instrument_id")
+            if not isinstance(raw_values, dict) or not isinstance(serial, str) or not isinstance(instrument_id, str):
+                raise ValueError(f"JSONL line {line_number} lacks GPS position or instrument identity")
+            serial_station = self.extract_station_code(serial)
+            match = re.fullmatch(r"([A-Z])(\d+)", instrument_id)
+            if match is None:
+                raise ValueError(f"Invalid instrument_id on JSONL line {line_number}: {instrument_id!r}")
+            id_station = f"{match.group(1)}{int(match.group(2)):04d}"
+            if serial_station != id_station:
+                raise ValueError(f"Instrument identity mismatch on JSONL line {line_number}")
+            if station is not None and station != id_station:
+                raise ValueError("mermaid-records JSONL contains multiple stations")
+            station = id_station
+            records.append(PositionRecord(self.parse_record_datetime(entry["record_time"]), self.parse_degrees_minutes(raw_values["latitude"]), self.parse_degrees_minutes(raw_values["longitude"])))
+        if station is None:
+            raise RuntimeError("No fix_position records found")
+        return station, records
+
+    def write_records_to_kml(self, records: list[PositionRecord], station: str, output_path: Path, source_type: str, source_ref: str) -> None:
+        root = ET.Element(f"{{{KML_NS}}}kml")
+        document = ET.SubElement(root, f"{{{KML_NS}}}Document")
+        ET.SubElement(document, f"{{{KML_NS}}}name").text = station
+        ET.SubElement(document, f"{{{KML_NS}}}description").text = f"Generated from {source_type} input"
+        extended_data = ET.SubElement(document, f"{{{KML_NS}}}ExtendedData")
+        metadata = {"source_type": source_type, "source_ref": source_ref, "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": str(self.limit)}
+        for key, value in metadata.items():
+            data = ET.SubElement(extended_data, f"{{{KML_NS}}}Data", {"name": key})
+            ET.SubElement(data, f"{{{KML_NS}}}value").text = value
+        folder = ET.SubElement(document, f"{{{KML_NS}}}Folder", {"id": "GPS points"})
+        ET.SubElement(folder, f"{{{KML_NS}}}name").text = "GPS points"
+        for record in records:
+            placemark = ET.SubElement(folder, f"{{{KML_NS}}}Placemark")
+            ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{station} - {self.format_output_datetime(record.timestamp)}"
+            ET.SubElement(placemark, f"{{{KML_NS}}}visibility").text = "1"
+            ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl").text = "#markerStyle2"
+            point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
+            ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = f"{record.longitude},{record.latitude},0"
+        ET.indent(root, space="    ")
+        ET.ElementTree(root).write(output_path, encoding="UTF-8", xml_declaration=True)
+
+    def process_file(
+        self, input_path: Path, output_path: Path, source_type: str, source_tag: str
+    ) -> Path:
+        parser = {"automaid": self.parse_kml, "earthscopeoceans": self.parse_txt, "mermaid-records": self.parse_jsonl}[source_type]
+        station, records = parser(input_path)
         selected = self.select_recent_unique(records)
-        final_output = self.resolve_output_path(input_path, station, output_path, source_tag="kml")
-
-        self.write_records_to_kml(
-            records=selected,
-            station=station,
-            output_path=final_output,
-            document_name=document_name,
-            source_type="kml",
-            source_ref=str(input_path),
-        )
-
-        print(f"Station code: {station}")
-        print(f"Input GPS placemarks: {len(placemarks)}")
-        print(f"Written placemarks: {len(selected)}")
-        print(f"Output: {final_output}")
+        final_output = self.resolve_output_path(output_path, station, source_tag)
+        self.write_records_to_kml(selected, station, final_output, source_type, str(input_path))
+        print(f"Station code: {station}\nInput GPS records: {len(records)}\nWritten placemarks: {len(selected)}\nOutput: {final_output}")
         return final_output
-
-    def process_kml_directory(
-        self, parent_dir: Path, output_dir: Path | None = None
-    ) -> tuple[int, int, list[tuple[Path, str]]]:
-        if not parent_dir.is_dir():
-            raise RuntimeError(f"Not a directory: {parent_dir}")
-
-        processed = 0
-        skipped = 0
-        skipped_dirs: list[tuple[Path, str]] = []
-
-        if output_dir is not None:
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-        for station_dir in sorted(parent_dir.iterdir()):
-            if not station_dir.is_dir() or station_dir.name.startswith("."):
-                continue
-
-            input_kml = station_dir / "position.kml"
-            if not input_kml.exists():
-                skipped += 1
-                skipped_dirs.append((station_dir, "missing position.kml"))
-                continue
-
-            print(f"\nProcessing {input_kml}")
-            try:
-                self.process_kml_file(input_kml, output_path=output_dir)
-                processed += 1
-            except Exception as exc:  # noqa: BLE001
-                skipped += 1
-                skipped_dirs.append((station_dir, str(exc)))
-                print(f"Skipped {input_kml}: {exc}")
-
-        return processed, skipped, skipped_dirs
-
-    @staticmethod
-    def list_som_all_files(som_url: str, station: str | None = None) -> list[str]:
-        with urllib.request.urlopen(som_url) as resp:
-            html_text = resp.read().decode("utf-8", errors="replace")
-        parser = LinkExtractor()
-        parser.feed(html_text)
-        pattern = re.compile(r"^[A-Z]\d{3,4}_all\.txt$")
-        names = {href for href in parser.links if pattern.match(href)}
-        if station:
-            names = {name for name in names if name.startswith(f"{station}_")}
-        return sorted(names)
-
-    def process_online_som_all(
-        self, som_url: str, output_dir: Path, station: str | None = None
-    ) -> tuple[int, int, list[tuple[str, str]]]:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        processed = 0
-        skipped = 0
-        skipped_files: list[tuple[str, str]] = []
-
-        for name in self.list_som_all_files(som_url, station):
-            file_url = urllib.parse.urljoin(som_url, name)
-            print(f"\nProcessing {file_url}")
-            try:
-                with urllib.request.urlopen(file_url) as resp:
-                    txt = resp.read().decode("utf-8", errors="replace")
-
-                records: list[tuple[datetime, tuple[str, str], object]] = []
-                station_seen: str | None = None
-
-                for raw_line in txt.splitlines():
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    parts = line.split()
-                    if len(parts) < 5:
-                        continue
-
-                    station = parts[0]
-                    dt = self.parse_som_datetime(f"{parts[1]} {parts[2]}")
-                    lat_lon = (parts[3], parts[4])
-                    station_seen = station_seen or station
-                    records.append((dt, lat_lon, None))
-
-                if not records:
-                    raise RuntimeError("no valid rows found")
-                if not station_seen:
-                    raise RuntimeError("missing station field")
-
-                selected = self.select_recent_unique(records)
-                out_path = output_dir / self.build_default_output_filename(
-                    station_seen, source_tag="som-all"
-                )
-
-                self.write_records_to_kml(
-                    records=selected,
-                    station=station_seen,
-                    output_path=out_path,
-                    document_name=station_seen,
-                    source_type="txt",
-                    source_ref=file_url,
-                )
-
-                print(f"Station code: {station_seen}")
-                print(f"Input records: {len(records)}")
-                print(f"Written placemarks: {len(selected)}")
-                print(f"Output: {out_path}")
-                processed += 1
-            except Exception as exc:  # noqa: BLE001
-                skipped += 1
-                skipped_files.append((name, str(exc)))
-                print(f"Skipped {file_url}: {exc}")
-
-        return processed, skipped, skipped_files
-
 
 
 def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """Add the ``winnow_gps`` command to a top-level parser."""
-    parser = subparsers.add_parser(
-        "winnow_gps",
-        help="Winnow recent GPS points and write import-ready KML.",
-        description="Winnow KML to the most recent unique GPS points.",
-    )
+    parser = subparsers.add_parser("winnow_gps", help="Winnow recent GPS points and write import-ready KML.", description="Winnow one local GPS source to recent unique points.")
     configure_parser(parser)
     parser.set_defaults(handler=run)
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    """Add GPS-winnowing options to *parser*."""
-    parser.add_argument(
-        "input_kml",
-        type=Path,
-        nargs="?",
-        help="Path to input .kml (single-file mode)",
-    )
-    parser.add_argument(
-        "-p",
-        "--path",
-        type=Path,
-        help="Parent directory containing station subdirectories with position.kml",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help="Output path; default directory is $MERMAID/marinetraffic",
-    )
-    parser.add_argument(
-        "--som-all",
-        nargs="?",
-        const="",
-        metavar="STATION",
-        help="Fetch all SOM *_all.txt files, optionally for one station",
-    )
-    parser.add_argument(
-        "--som-url",
-        default=SOM_DEFAULT_URL,
-        help=f"SOM index URL (default: {SOM_DEFAULT_URL})",
-    )
-    parser.add_argument(
-        "--limit", type=int, default=50, help="Number of most recent points to keep"
-    )
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--kml", type=Path, metavar="FILE", help="automaid position.kml file")
+    sources.add_argument("--txt", type=Path, metavar="FILE", help="EarthScopeOceans.org SOM text file")
+    sources.add_argument("--jsonl", type=Path, metavar="FILE", help="mermaid-records GPS JSONL file")
+    parser.add_argument("-o", "--output", type=Path, help="Output file or directory (default: $MERMAID/marinetraffic)")
+    parser.add_argument("--limit", type=int, default=50, help="Number of most recent points to keep")
+
+
 def run(args: argparse.Namespace) -> None:
-    """Run GPS winnowing from parsed command arguments."""
     winnower = GPSKMLWinnower(limit=args.limit)
-
-    if args.som_all is not None:
-        if args.input_kml or args.path:
-            raise SystemExit("Use --som-all by itself (no input_kml or -p).")
-        output_path = args.output or winnower.default_output_directory()
-        if output_path.suffix.lower() == ".kml":
-            raise SystemExit("--som-all requires -o as a directory, not a .kml file.")
-
-        processed, skipped, skipped_files = winnower.process_online_som_all(
-            som_url=args.som_url, output_dir=output_path, station=args.som_all or None
-        )
-        print(f"\nDone. Processed: {processed}, Skipped: {skipped}")
-        if skipped_files:
-            print("Skipped files:")
-            for name, reason in skipped_files:
-                print(f"- {name} ({reason})")
-        return
-
-    if args.path:
-        if args.input_kml:
-            raise SystemExit("Do not pass positional input_kml when using -p.")
-        output_path = args.output or winnower.default_output_directory()
-        processed, skipped, skipped_dirs = winnower.process_kml_directory(
-            args.path, output_dir=output_path
-        )
-        print(f"\nDone. Processed: {processed}, Skipped: {skipped}")
-        if skipped_dirs:
-            print("Skipped directories:")
-            for skipped_dir, reason in skipped_dirs:
-                print(f"- {skipped_dir} ({reason})")
-        return
-
-    if not args.input_kml:
-        raise SystemExit("Provide input_kml, or use -p, or use --som-all.")
-
     output_path = args.output or winnower.default_output_directory()
-    winnower.process_kml_file(args.input_kml, output_path)
+    for input_path, source_type, source_tag in (
+        (args.kml, "automaid", "kml"),
+        (args.txt, "earthscopeoceans", "txt"),
+        (args.jsonl, "mermaid-records", "jsonl"),
+    ):
+        if input_path is not None:
+            winnower.process_file(input_path, output_path, source_type, source_tag)
+            return
+    raise RuntimeError("No input source selected")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Run ``winnow_gps`` directly as a module-level command."""
-    parser = argparse.ArgumentParser(
-        prog="mermaid-marinetraffic winnow_gps",
-        description="Winnow KML to the most recent unique GPS points.",
-    )
+    parser = argparse.ArgumentParser(prog="mermaid-marinetraffic winnow_gps", description="Winnow one local GPS source to recent unique points.")
     configure_parser(parser)
     run(parser.parse_args(argv))
 

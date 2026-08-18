@@ -9,7 +9,7 @@
 
 ## Compatibility
 
-- Preserve the three supported input modes: a single local KML file, local batch mode via `-p/--path`, and online SOM batch mode via `--som-all`.
+- `winnow_gps` accepts exactly one local input source: `--kml FILE`, `--txt FILE`, or `--jsonl FILE`.
 - Preserve established output filenames, placemark names, and KML provenance metadata unless a task explicitly changes them.
 - Update `README.md` and focused tests when user-visible CLI or output behavior changes.
 
