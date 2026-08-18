@@ -9,6 +9,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Changed
 - Simplified repository instructions, documentation, and local-file ignore rules.
 - Added focused tests for deterministic KML winnowing behavior.
+- Converted the standalone script into the installable `merinetraffic` package with the `winnow_gps` command.
 
 ## [0.1.2] - 2026-03-18
 

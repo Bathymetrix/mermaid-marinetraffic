@@ -9,6 +9,7 @@ import re
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -18,13 +19,6 @@ KML_NS = "http://www.opengis.net/kml/2.2"
 GX_NS = "http://www.google.com/kml/ext/2.2"
 NS = {"k": KML_NS}
 SOM_DEFAULT_URL = "https://geoweb.princeton.edu/people/simons/SOM/"
-VERSION_FILE = Path(__file__).with_name("VERSION")
-
-
-def get_version() -> str:
-    if VERSION_FILE.exists():
-        return VERSION_FILE.read_text(encoding="utf-8").strip()
-    return "0.0.0+unknown"
 
 
 class LinkExtractor(HTMLParser):
@@ -264,23 +258,26 @@ class GPSKMLWinnower:
         return processed, skipped, skipped_dirs
 
     @staticmethod
-    def list_som_all_files(som_url: str) -> list[str]:
+    def list_som_all_files(som_url: str, station: str | None = None) -> list[str]:
         with urllib.request.urlopen(som_url) as resp:
             html_text = resp.read().decode("utf-8", errors="replace")
         parser = LinkExtractor()
         parser.feed(html_text)
         pattern = re.compile(r"^[A-Z]\d{3,4}_all\.txt$")
-        return sorted({href for href in parser.links if pattern.match(href)})
+        names = {href for href in parser.links if pattern.match(href)}
+        if station:
+            names = {name for name in names if name.startswith(f"{station}_")}
+        return sorted(names)
 
     def process_online_som_all(
-        self, som_url: str, output_dir: Path
+        self, som_url: str, output_dir: Path, station: str | None = None
     ) -> tuple[int, int, list[tuple[str, str]]]:
         output_dir.mkdir(parents=True, exist_ok=True)
         processed = 0
         skipped = 0
         skipped_files: list[tuple[str, str]] = []
 
-        for name in self.list_som_all_files(som_url):
+        for name in self.list_som_all_files(som_url, station):
             file_url = urllib.parse.urljoin(som_url, name)
             print(f"\nProcessing {file_url}")
             try:
@@ -337,13 +334,19 @@ class GPSKMLWinnower:
 
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Winnow KML to the most recent unique GPS points."
+def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add the ``winnow_gps`` command to a top-level parser."""
+    parser = subparsers.add_parser(
+        "winnow_gps",
+        help="Winnow recent GPS points and write import-ready KML.",
+        description="Winnow KML to the most recent unique GPS points.",
     )
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {get_version()}"
-    )
+    configure_parser(parser)
+    parser.set_defaults(handler=run)
+
+
+def configure_parser(parser: argparse.ArgumentParser) -> None:
+    """Add GPS-winnowing options to *parser*."""
     parser.add_argument(
         "input_kml",
         type=Path,
@@ -364,8 +367,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--som-all",
-        action="store_true",
-        help="Fetch and convert all *_all.txt files from SOM URL",
+        nargs="?",
+        const="",
+        metavar="STATION",
+        help="Fetch all SOM *_all.txt files, optionally for one station",
     )
     parser.add_argument(
         "--som-url",
@@ -375,11 +380,11 @@ def main() -> None:
     parser.add_argument(
         "--limit", type=int, default=50, help="Number of most recent points to keep"
     )
-    args = parser.parse_args()
-
+def run(args: argparse.Namespace) -> None:
+    """Run GPS winnowing from parsed command arguments."""
     winnower = GPSKMLWinnower(limit=args.limit)
 
-    if args.som_all:
+    if args.som_all is not None:
         if args.input_kml or args.path:
             raise SystemExit("Use --som-all by itself (no input_kml or -p).")
         if args.output is None:
@@ -390,7 +395,7 @@ def main() -> None:
             output_dir = args.output
 
         processed, skipped, skipped_files = winnower.process_online_som_all(
-            som_url=args.som_url, output_dir=output_dir
+            som_url=args.som_url, output_dir=output_dir, station=args.som_all or None
         )
         print(f"\nDone. Processed: {processed}, Skipped: {skipped}")
         if skipped_files:
@@ -416,6 +421,16 @@ def main() -> None:
         raise SystemExit("Provide input_kml, or use -p, or use --som-all.")
 
     winnower.process_kml_file(args.input_kml, args.output)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Run ``winnow_gps`` directly as a module-level command."""
+    parser = argparse.ArgumentParser(
+        prog="merinetraffic winnow_gps",
+        description="Winnow KML to the most recent unique GPS points.",
+    )
+    configure_parser(parser)
+    run(parser.parse_args(argv))
 
 
 if __name__ == "__main__":
