@@ -339,7 +339,7 @@ class GPSKMLWinnower:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Winnow KML to 50 most recent unique GPS points."
+        description="Winnow KML to the most recent unique GPS points."
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {get_version()}"

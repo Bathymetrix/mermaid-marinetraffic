@@ -1,139 +1,65 @@
-## merinetraffic
-## Tools to interface MERMAIDs with MarineTraffic.com
+# merinetraffic
 
-### _______________________________________
-### KML Winnowing for "Custom Area" imports
+`merinetraffic` prepares recent MERMAID position histories for MarineTraffic Custom Area imports. Its single script, `gps_winnower.py`, reads position data, removes adjacent duplicate fixes, keeps the most recent points, and writes a KML file for import.
 
-### Script: `gps_winnower.py`
-### Purpose: reduce GPS history to last N unique points and export KML
+The included `position.kml` is a representative local KML input.
 
-### Supported Input Modes
-The script supports three mutually exclusive input modes.
+## Input modes
 
-1. Single local KML file (`position.kml` style)
-- Provide positional `input_kml`.
-- Example:
+`gps_winnower.py` supports three mutually exclusive modes:
+
+- **Single local KML:** pass a KML file as `input_kml`.
+- **Local batch:** pass a parent directory with `-p/--path`; each station subdirectory may contain `position.kml`.
+- **Online SOM batch:** pass `--som-all` to fetch matching `*_all.txt` files from the SOM index.
+
+For local KML inputs, only placemarks in `<Folder id="GPS points">` are processed. Adjacent records are considered duplicates only when both their datetime and latitude/longitude match. After deduplication, the most recent records are retained.
+
+Station codes are derived from the source document name as five characters. For example, `452.120-R-0061` becomes `R0061`, and `452.020-P-24` becomes `P0024`.
+
+## Usage
+
 ```bash
-python3 gps_winnower.py /path/to/position.kml
-```
+# Process one KML file
+python3 gps_winnower.py position.kml
 
-2. Local station directory batch (`-p`)
-- Provide `-p /path/to/parent_dir`.
-- Parent dir should contain station subdirectories, each with `position.kml`.
-- Hidden dot-directories are ignored.
-- Example:
-```bash
-python3 gps_winnower.py -p /path/to/stations_parent
-```
+# Process station directories beneath a parent directory
+python3 gps_winnower.py -p stations_parent
 
-3. Online SOM `*_all.txt` batch (`--som-all`)
-- Provide `--som-all` to fetch and process all matching files from SOM index.
-- Uses SOM URL default unless overridden with `--som-url`.
-- Example:
-```bash
+# Fetch and process SOM *_all.txt files
 python3 gps_winnower.py --som-all
 ```
 
-### SOM URL Default
-If `--som-all` is used and `--som-url` is not provided, default source is:
-- `https://geoweb.princeton.edu/people/simons/SOM/`
+## Options
 
-Override example:
-```bash
-python3 gps_winnower.py --som-all --som-url "https://geoweb.princeton.edu/people/simons/SOM/"
+```text
+input_kml          KML file for single-file mode
+-p, --path PATH    Parent directory for local batch mode
+-o, --output PATH  Output file or directory, depending on mode
+--som-all          Process all matching SOM *_all.txt files
+--som-url URL      SOM index URL (default: https://geoweb.princeton.edu/people/simons/SOM/)
+--limit N          Number of most recent unique points to keep (default: 50)
+--version          Print the version from VERSION
 ```
 
-### Core Processing Rules
-- Keep only points from KML `<Folder id="GPS points">` (for KML inputs).
-- Uniqueness rule: adjacent duplicate points are dropped only when both match:
-  - datetime
-  - lat/lon
-- Keep most recent points after dedupe.
-- Default point count is 50 (`--limit 50`).
-- Output `<name>` format:
-  - `STATION - DD-Mon-YYYY HH:MM`
+## Output
 
-### Station Code Rule
-Station code is always 5 characters, derived from document/station naming conventions.
-Examples:
-- `452.120-R-0061` -> `R0061`
-- `452.020-P-24` -> `P0024`
+By default, single-file mode writes beside its input and local batch mode writes in each station directory. In either local mode, `-o` may be a `.kml` filename for single-file mode or a directory for either mode; directories are created as needed.
 
-### CLI Options and Defaults
-- `input_kml`:
-  - positional; used only in single-file mode
-- `-p, --path`:
-  - local batch mode root directory
-- `--som-all`:
-  - online SOM batch mode
-- `--som-url`:
-  - SOM index URL
-  - default: `https://geoweb.princeton.edu/people/simons/SOM/`
-- `--limit`:
-  - number of most recent unique points to keep
-  - default: `50`
-- `--version`:
-  - prints the current script version from `VERSION`
-- `-o, --output`:
-  - output file or directory depending on mode (see below)
+SOM batch mode writes to `som_last_50_kml` by default. Its `-o` value must be a directory.
 
-### Output Behavior by Mode
-1. Single KML mode (`input_kml`)
-- `-o` omitted:
-  - writes next to input as `recent_gps_<STATION>_src-kml.kml`
-- `-o` is `.kml` path:
-  - writes exactly that file
-- `-o` is directory path:
-  - creates directory if needed
-  - writes `recent_gps_<STATION>_src-kml.kml` inside
+Default output names identify the source:
 
-2. Local batch mode (`-p`)
-- `-o` omitted:
-  - writes output per station in each station subdirectory
-- `-o` directory provided:
-  - creates directory if needed
-  - writes all station outputs there
-- skipped station dirs (for example missing `position.kml`) are summarized at end
+```text
+recent_gps_<STATION>_src-kml.kml
+recent_gps_<STATION>_src-som-all.kml
+```
 
-3. SOM online mode (`--som-all`)
-- `-o` omitted:
-  - writes into default directory: `som_last_50_kml`
-- `-o` directory provided:
-  - creates directory if needed
-  - writes all station outputs there
-- `-o` as `.kml` file is not allowed in this mode
+Placemark names use `STATION - DD-Mon-YYYY HH:MM`. Generated KML documents include `source_type`, `source_ref`, `generated_utc`, and `limit` in `Document/ExtendedData`.
 
-### Output Naming Convention
-- KML source output:
-  - `recent_gps_<STATION>_src-kml.kml`
-- SOM source output:
-  - `recent_gps_<STATION>_src-som-all.kml`
+## Version
 
-Examples:
-- `recent_gps_R0061_src-kml.kml`
-- `recent_gps_R0061_src-som-all.kml`
-
-### Embedded KML Provenance Metadata
-Generated KML includes `Document/ExtendedData` keys:
-- `source_type`
-- `source_ref`
-- `generated_utc`
-- `limit`
-
-### Last-Tested Runtime Environment
-- OS: Darwin Kernel Version 23.6.0 (`RELEASE_ARM64_T6031`)
-- Python: 3.12.4
-
-### Versioning
-- Current version is stored in `VERSION`.
-- Show version:
 ```bash
 python3 gps_winnower.py --version
 ```
-- Release notes are tracked in `CHANGELOG.md`.
 
-## Contact
-- Joel D. Simon: `jdsimon@bathymetrix.com`
-
-## Attribution
-- Script development and iterative modifications were performed in collaboration with Codex (OpenAI).
+Release notes are maintained in `CHANGELOG.md`.

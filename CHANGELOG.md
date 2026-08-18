@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## Unreleased
+
+### Changed
+- Simplified repository instructions, documentation, and local-file ignore rules.
+- Added focused tests for deterministic KML winnowing behavior.
+
 ## [0.1.2] - 2026-03-18
 
 ### Changed
