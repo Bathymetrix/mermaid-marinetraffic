@@ -9,6 +9,14 @@ The included `position.kml` is a representative local KML input.
 From a checkout of this repository:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+If a suitable virtual environment is already active, install directly with:
+
+```bash
 python -m pip install -e .
 ```
 
