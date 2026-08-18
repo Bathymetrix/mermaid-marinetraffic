@@ -1,4 +1,4 @@
-"""Focused tests for the winnow_gps command and local source parsers."""
+"""Focused tests for trajectory and individual-point KML products."""
 
 from datetime import datetime
 from pathlib import Path
@@ -9,49 +9,94 @@ import pytest
 from mermaid_marinetraffic import __version__, cli, winnow_gps
 
 FIXTURES = Path(__file__).parent / "fixtures"
+NS = {"k": winnow_gps.KML_NS}
+GENERATED_UTC = "2026-08-18T12:00:00Z"
 
 
-def test_top_level_help_and_version(capsys: pytest.CaptureFixture[str]) -> None:
+def records() -> list[winnow_gps.PositionRecord]:
+    return [
+        winnow_gps.PositionRecord(datetime(2024, 1, 3), "3", "30"),
+        winnow_gps.PositionRecord(datetime(2024, 1, 1), "1", "10"),
+        winnow_gps.PositionRecord(datetime(2024, 1, 1), "1", "10"),
+        winnow_gps.PositionRecord(datetime(2024, 1, 2), "2", "20"),
+    ]
+
+
+def parse(data: bytes) -> ET.Element:
+    return ET.fromstring(data)
+
+
+def test_top_level_help_version_and_product_commands(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--help"])
-    output = capsys.readouterr().out
-    assert "winnow_gps_file" in output
-    assert "winnow_gps_dir" in output
+    help_text = capsys.readouterr().out
+    assert "trajectory" in help_text and "points" in help_text
+    assert "winnow_gps" not in help_text
+    for command in ("trajectory", "points"):
+        with pytest.raises(SystemExit, match="0"):
+            cli.main([command, "--help"])
+        assert "--limit N" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--version"])
     assert capsys.readouterr().out.strip() == __version__
 
 
-def test_winnow_gps_file_requires_exactly_one_local_source(capsys: pytest.CaptureFixture[str]) -> None:
-    parser = cli.build_parser()
-    with pytest.raises(SystemExit, match="2"):
-        parser.parse_args(["winnow_gps_file"])
-    with pytest.raises(SystemExit, match="2"):
-        parser.parse_args(["winnow_gps_file", "--kml", "a.kml", "--txt", "a.txt"])
-    with pytest.raises(SystemExit, match="0"):
-        cli.main(["winnow_gps_file", "--help"])
-    output = capsys.readouterr().out
-    assert all(option in output for option in ("--kml FILE", "--txt FILE", "--jsonl FILE"))
-    assert "--som-all" not in output and "--path" not in output
+def test_selection_defaults_to_complete_ordered_history_and_limit_is_recent() -> None:
+    assert [record.latitude for record in winnow_gps.GPSKMLWinnower().select_records(records())] == ["1", "2", "3"]
+    assert [record.latitude for record in winnow_gps.GPSKMLWinnower(limit=2).select_records(records())] == ["2", "3"]
 
 
-def test_default_output_directory_uses_mermaid_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("MERMAID", str(tmp_path))
-    assert winnow_gps.GPSKMLWinnower.default_output_directory() == tmp_path / "marinetraffic"
+def test_trajectory_has_ordered_linestring_latest_point_styles_and_provenance() -> None:
+    winnower = winnow_gps.GPSKMLWinnower(limit=2)
+    data = winnower.render_kml_bytes(
+        winnower.select_records(records()), "P0021", "automaid", "/input/position.kml",
+        "trajectory", GENERATED_UTC,
+    )
+    root = parse(data)
+    line_coordinates = root.findtext(".//k:LineString/k:coordinates", namespaces=NS)
+    assert line_coordinates.splitlines() == ["20,2,0", "30,3,0"]
+    latest_coordinates = root.findtext(".//k:Placemark[k:name='P0021 - latest - 03-Jan-2024 00:00']/k:Point/k:coordinates", namespaces=NS)
+    assert latest_coordinates == "30,3,0"
+    assert root.findtext(".//k:Placemark[k:name='P0021 trajectory']/k:styleUrl", namespaces=NS) == "#trajectory"
+    assert root.findtext(".//k:Placemark[k:Point]/k:styleUrl", namespaces=NS) == "#latest-position"
+    assert root.findtext(".//k:Style[@id='trajectory']/k:LineStyle/k:width", namespaces=NS) == "3"
+    assert root.findtext(".//k:Style[@id='latest-position']/k:IconStyle/k:scale", namespaces=NS) == "1.8"
+    metadata = {item.get("name"): item.findtext("k:value", namespaces=NS) for item in root.findall(".//k:Data", NS)}
+    assert metadata == {
+        "source_type": "automaid", "source_ref": "/input/position.kml",
+        "generated_utc": GENERATED_UTC, "geometry_type": "trajectory",
+        "gps_points": "2", "limit": "2",
+    }
 
 
-def test_station_code_datetime_and_json_coordinate_parsing() -> None:
-    winnower = winnow_gps.GPSKMLWinnower()
-    assert winnower.extract_station_code("452.020-P-21") == "P0021"
-    assert winnower.parse_point_datetime("06/03/24 13:45") == datetime(2024, 3, 6, 13, 45)
-    assert winnower.parse_degrees_minutes("S23deg38.830mn") == "-23.647167"
-    assert winnower.parse_degrees_minutes("E007deg19.164mn") == "7.319400"
+def test_single_fix_trajectory_preserves_latest_position_without_degenerate_line() -> None:
+    data = winnow_gps.GPSKMLWinnower().render_kml_bytes(
+        records()[:1], "P0021", "automaid", "/input", "trajectory", GENERATED_UTC
+    )
+    root = parse(data)
+    assert root.find(".//k:LineString", NS) is None
+    assert root.findtext(".//k:Point/k:coordinates", namespaces=NS) == "30,3,0"
 
 
-def test_default_filenames_keep_source_option_tags() -> None:
-    assert winnow_gps.GPSKMLWinnower.build_default_output_filename("P0021", "kml") == "recent_gps_P0021_src-kml.kml"
-    assert winnow_gps.GPSKMLWinnower.build_default_output_filename("P0021", "txt") == "recent_gps_P0021_src-txt.kml"
-    assert winnow_gps.GPSKMLWinnower.build_default_output_filename("P0021", "jsonl") == "recent_gps_P0021_src-jsonl.kml"
+def test_points_renderer_emits_one_point_per_selected_fix() -> None:
+    selected = winnow_gps.GPSKMLWinnower(limit=2).select_records(records())
+    root = parse(winnow_gps.GPSKMLWinnower(limit=2).render_kml_bytes(
+        selected, "P0021", "automaid", "/input", "points", GENERATED_UTC
+    ))
+    placemarks = root.findall(".//k:Placemark", NS)
+    assert len(placemarks) == 2
+    assert [item.findtext("k:name", namespaces=NS) for item in placemarks] == [
+        "P0021 - 02-Jan-2024 00:00", "P0021 - 03-Jan-2024 00:00"
+    ]
+    assert all(item.findtext("k:styleUrl", namespaces=NS) == "#gps-point" for item in placemarks)
+
+
+def test_json_coordinate_and_identity_parsing() -> None:
+    station, parsed = winnow_gps.GPSKMLWinnower().parse_jsonl(FIXTURES / "log_gps_records.452.020-P-21.jsonl")
+    assert station == "P0021"
+    assert parsed[0].timestamp == datetime(2018, 6, 13, 9, 49, 48)
+    assert parsed[0].latitude == "43.682650"
+    assert parsed[0].longitude == "7.319400"
 
 
 @pytest.mark.parametrize(
@@ -62,33 +107,51 @@ def test_default_filenames_keep_source_option_tags() -> None:
         ("--jsonl", "log_gps_records.452.020-P-21.jsonl", "mermaid-records"),
     ],
 )
-def test_each_local_source_writes_uniform_kml(tmp_path: Path, option: str, fixture_name: str, source_type: str) -> None:
-    output = tmp_path / "output.kml"
-    cli.main(["winnow_gps_file", option, str(FIXTURES / fixture_name), "-o", str(output), "--limit", "3"])
+def test_trajectory_accepts_each_file_source(tmp_path: Path, option: str, fixture_name: str, source_type: str) -> None:
+    output = tmp_path / "trajectory.kml"
+    cli.main(["trajectory", option, str(FIXTURES / fixture_name), "-o", str(output), "--limit", "3"])
     root = ET.parse(output).getroot()
-    namespace = {"k": winnow_gps.KML_NS}
-    placemarks = root.findall(".//k:Folder/k:Placemark", namespace)
-    metadata = {item.get("name"): item.findtext("k:value", namespaces=namespace) for item in root.findall(".//k:ExtendedData/k:Data", namespace)}
-    assert len(placemarks) == 3
-    assert all(item.findtext("k:name", namespaces=namespace).startswith("P0021 - ") for item in placemarks)
+    assert root.find(".//k:LineString", NS) is not None
+    assert root.find(".//k:Point", NS) is not None
+    metadata = {item.get("name"): item.findtext("k:value", namespaces=NS) for item in root.findall(".//k:Data", NS)}
     assert metadata["source_type"] == source_type
-    assert metadata["source_ref"] == str(FIXTURES / fixture_name)
 
 
-def test_jsonl_parser_accepts_only_fix_position_records() -> None:
-    station, records = winnow_gps.GPSKMLWinnower().parse_jsonl(FIXTURES / "log_gps_records.452.020-P-21.jsonl")
-    assert station == "P0021"
-    assert records[0].timestamp == datetime(2018, 6, 13, 9, 49, 48)
-    assert records[0].latitude == "43.682650"
-    assert records[0].longitude == "7.319400"
-
-
-def test_winnow_gps_dir_recurses_and_writes_flat_output(tmp_path: Path) -> None:
+def test_directory_source_writes_flat_trajectory_output(tmp_path: Path) -> None:
     input_file = tmp_path / "processed" / "452.020-P-21" / "position.kml"
     input_file.parent.mkdir(parents=True)
     input_file.write_bytes((FIXTURES / "P0021_position.kml").read_bytes())
     output_directory = tmp_path / "output"
+    cli.main(["trajectory", "--kml", str(tmp_path / "processed"), "-o", str(output_directory), "--limit", "2"])
+    assert list(output_directory.iterdir()) == [output_directory / "gps_trajectory_P0021_src-kml.kml"]
 
-    cli.main(["winnow_gps_dir", "--kml", str(tmp_path / "processed"), "-o", str(output_directory), "--limit", "2"])
 
-    assert list(output_directory.iterdir()) == [output_directory / "recent_gps_P0021_src-kml.kml"]
+def test_points_command_writes_points_product(tmp_path: Path) -> None:
+    output = tmp_path / "points.kml"
+    cli.main(["points", "--txt", str(FIXTURES / "P0021_all.txt"), "-o", str(output), "--limit", "2"])
+    assert len(ET.parse(output).getroot().findall(".//k:Point", NS)) == 2
+
+
+def test_size_limit_reports_exact_largest_fitting_limit() -> None:
+    all_records = winnow_gps.GPSKMLWinnower().ordered_unique_records(records())
+    baseline = winnow_gps.GPSKMLWinnower()
+    size_for_two = len(baseline.render_kml_bytes(all_records[-2:], "P0021", "automaid", "/input", "trajectory", GENERATED_UTC))
+    winnower = winnow_gps.GPSKMLWinnower(max_kml_bytes=size_for_two)
+    fitting = winnower.render_kml_bytes(all_records[-2:], "P0021", "automaid", "/input", "trajectory", GENERATED_UTC)
+    oversized = winnower.render_kml_bytes(all_records, "P0021", "automaid", "/input", "trajectory", GENERATED_UTC)
+    winnower.enforce_size(fitting, all_records, "P0021", "automaid", "/input", "trajectory", GENERATED_UTC)
+    with pytest.raises(winnow_gps.KMLSizeError) as error:
+        winnower.enforce_size(oversized, all_records, "P0021", "automaid", "/input", "trajectory", GENERATED_UTC)
+    assert f"KML size:           {len(oversized)} bytes" in str(error.value)
+    assert "Maximum GPS points: 2" in str(error.value)
+    assert "Rerun with --limit 2 or smaller." in str(error.value)
+
+
+def test_oversize_prevents_output_and_invalid_limit_is_rejected(tmp_path: Path) -> None:
+    output = tmp_path / "too-large.kml"
+    winnower = winnow_gps.GPSKMLWinnower(max_kml_bytes=1)
+    with pytest.raises(winnow_gps.KMLSizeError):
+        winnower.prepare_product(FIXTURES / "P0021_position.kml", "automaid", "kml", "trajectory", output, GENERATED_UTC)
+    assert not output.exists()
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["trajectory", "--kml", "input.kml", "--limit", "0"])

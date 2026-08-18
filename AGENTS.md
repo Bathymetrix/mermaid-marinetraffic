@@ -9,8 +9,11 @@
 
 ## Compatibility
 
-- `winnow_gps_file` accepts exactly one local input source: `--kml FILE`, `--txt FILE`, or `--jsonl FILE`. `winnow_gps_dir` recursively processes the corresponding source family from one directory.
-- Preserve established output filenames, placemark names, and KML provenance metadata unless a task explicitly changes them.
+- `trajectory` is the primary product command; `points` retains individual Point output.
+- Input source options accept a file or recursively discovered directory input.
+- Trajectory defaults to complete valid, adjacent-deduplicated history. `--limit` means most-recent unique GPS fixes.
+- MarineTraffic KML must not exceed 400,000 serialized bytes. Never silently truncate oversized history; report the exact maximum fitting `--limit`.
+- Trajectory KML contains a chronological LineString and a separate latest Point when at least two fixes exist. Source parsing and selection rules must be shared by both renderers.
 - Update `README.md` and focused tests when user-visible CLI or output behavior changes.
 
 ## Repository maintenance

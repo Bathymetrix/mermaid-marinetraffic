@@ -1,13 +1,12 @@
 # mermaid-marinetraffic
 
-`mermaid-marinetraffic` prepares recent MERMAID GPS histories for MarineTraffic Custom Area imports. The `winnow_gps_file` and `winnow_gps_dir` commands remove adjacent duplicate fixes, retain the most recent points, and write import-ready KML.
-
-The command accepts one explicit local GPS source per run and writes a common
-KML representation for MarineTraffic import.
+`mermaid-marinetraffic` prepares MERMAID GPS trajectories for MarineTraffic
+Custom Area KML imports. It reads validated local position histories and writes
+one KML product per float.
 
 ## Installation
 
-From a checkout of this repository:
+From a checkout:
 
 ```bash
 python3 -m venv .venv
@@ -15,96 +14,81 @@ source .venv/bin/activate
 python -m pip install -e .
 ```
 
-If a suitable virtual environment is already active, install directly with:
-
-```bash
-python -m pip install -e .
-```
-
 The installed interface is `mermaid-marinetraffic <command> [options]`.
 
-```bash
-mermaid-marinetraffic --help
-mermaid-marinetraffic --version
-mermaid-marinetraffic winnow_gps_file --help
-mermaid-marinetraffic winnow_gps_dir --help
+## Products
 
-# Equivalent module interface
-python -m mermaid_marinetraffic --help
-```
+`trajectory` is the default product model. It uses the complete valid,
+adjacent-deduplicated GPS history unless `--limit N` is supplied. A trajectory
+KML contains one chronological LineString (oldest to newest) and a separate
+Point marking the latest fix. A one-fix history contains the useful latest
+Point without a degenerate LineString.
 
-## Winnow GPS histories
-
-`mermaid-marinetraffic winnow_gps_file` requires exactly one of three mutually
-exclusive local input options:
-
-- `--kml FILE`: an `automaid` KML such as `$MERMAID/processed_everyone/452.020-P-21/position.kml`.
-- `--txt FILE`: an EarthScopeOceans.org SOM text file such as `$MERMAID/esoloc/P0021_all.txt`.
-- `--jsonl FILE`: a `mermaid-records` GPS-family JSONL file such as `$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl`.
+`points` retains the alternate individual-point product: one Point Placemark
+per selected GPS fix, with the established station/timestamp names.
 
 ```bash
-# automaid KML
-mermaid-marinetraffic winnow_gps_file --kml "$MERMAID/processed_everyone/452.020-P-21/position.kml"
+# Complete trajectory from a single mermaid-records file
+mermaid-marinetraffic trajectory \
+  --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl"
 
-# EarthScopeOceans.org SOM text
-mermaid-marinetraffic winnow_gps_file --txt "$MERMAID/esoloc/P0021_all.txt"
+# Complete trajectory for every established JSONL input under records
+mermaid-marinetraffic trajectory --jsonl "$MERMAID/records" \
+  -o "$MERMAID/marinetraffic"
 
-# mermaid-records JSONL
-mermaid-marinetraffic winnow_gps_file --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl"
+# Keep only the 50 most recent unique GPS fixes
+mermaid-marinetraffic trajectory --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl" --limit 50
+
+# Alternate Point-only KML
+mermaid-marinetraffic points --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl"
 ```
 
-`mermaid-marinetraffic winnow_gps_dir` accepts the same mutually exclusive
-source options, but each value is a directory. It recursively discovers only
-the corresponding established source filename and writes all outputs into one
-flat output directory:
+All commands require exactly one input source:
 
-```bash
-# Finds every */position.kml beneath the processed directory.
-mermaid-marinetraffic winnow_gps_dir --kml "$MERMAID/processed_everyone" -o "$MERMAID/marinetraffic"
+- `--kml PATH`: automaid `position.kml`, for example
+  `$MERMAID/processed_everyone/452.020-P-21/position.kml`.
+- `--txt PATH`: EarthScopeOceans.org SOM text, for example
+  `$MERMAID/esoloc/P0021_all.txt`.
+- `--jsonl PATH`: mermaid-records GPS JSONL, for example
+  `$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl`.
 
-# Finds every log_gps_records.*.jsonl beneath records.
-mermaid-marinetraffic winnow_gps_dir --jsonl "$MERMAID/records" -o "$MERMAID/marinetraffic"
-```
+Each `PATH` can be a file or a directory. Directory inputs are recursive and
+discover only `position.kml`, `*_all.txt`, or
+`log_gps_records.*.jsonl`, respectively. Batch outputs are flat and the
+command stops if two inputs would have the same destination filename.
 
-The directory command finds `position.kml` for `--kml`, `*_all.txt` for
-`--txt`, and `log_gps_records.*.jsonl` for `--jsonl`. It stops if two inputs
-would produce the same flat output filename.
+KML input uses only `<Folder id="GPS points">`. JSONL uses only
+`gps_record_kind == "fix_position"`, validates instrument identity, and
+converts N/S/E/W degree/minute coordinates to decimal degrees.
 
-For `--kml`, only placemarks in `<Folder id="GPS points">` are processed. For
-`--jsonl`, only records with `gps_record_kind == "fix_position"` are used;
-their `record_time` and `raw_values.latitude`/`longitude` fields are read, and
-N/S/E/W degrees/minutes values are converted to decimal degrees. Adjacent
-records are duplicates only when both datetime and latitude/longitude match.
-The command retains the most recent records after deduplication.
+## History selection and size limit
 
-KML station codes are derived from document names as five characters; for
-example, `452.120-R-0061` becomes `R0061` and `452.020-P-24` becomes `P0024`.
-Text files use their station column. JSONL verifies that `instrument_id` and
-`instrument_serial` agree, so `P0021` maps to `452.020-P-21`.
+`--limit N` means exactly the number of most recent unique GPS fixes after
+adjacent duplicate removal and chronological ordering. Without it, all
+available valid fixes are used. Zero and negative values are rejected.
 
-## Options and output
+MarineTraffic advertises a `MAX 400KB` upload limit. This package enforces a
+conservative 400,000-byte ceiling on the actual serialized KML bytes. It never
+silently truncates, down-samples, or writes an oversized product. If a product
+is too large, it reports the actual byte size and the exact largest
+`--limit N` that fits the same rendered schema.
+
+## Output
+
+Without `-o`, outputs go to `$MERMAID/marinetraffic`. For a single input,
+`-o` may be a KML filename or directory; directory input requires an output
+directory.
 
 ```text
---kml FILE         automaid position.kml file
---txt FILE         EarthScopeOceans.org SOM text file
---jsonl FILE       mermaid-records GPS JSONL file
--o, --output PATH  Output file or directory (default: $MERMAID/marinetraffic)
---limit N          Number of most recent unique points to keep (default: 50)
+gps_trajectory_<STATION>_src-kml.kml
+gps_trajectory_<STATION>_src-txt.kml
+gps_trajectory_<STATION>_src-jsonl.kml
+gps_points_<STATION>_src-kml.kml
+gps_points_<STATION>_src-txt.kml
+gps_points_<STATION>_src-jsonl.kml
 ```
 
-For `winnow_gps_dir`, replace each `FILE` with `DIR`. Its `-o/--output` must be
-a directory.
-
-Without `-o`, both commands write to `$MERMAID/marinetraffic`, creating that directory as needed. Set `MERMAID` or provide `-o` explicitly. For `winnow_gps_file`, `-o` may be a `.kml` output filename or an output directory; `winnow_gps_dir` always requires a directory.
-
-Output names identify the source:
-
-```text
-recent_gps_<STATION>_src-kml.kml
-recent_gps_<STATION>_src-txt.kml
-recent_gps_<STATION>_src-jsonl.kml
-```
-
-Placemark names use `STATION - DD-Mon-YYYY HH:MM`. Generated KML documents include `source_type`, `source_ref`, `generated_utc`, and `limit` in `Document/ExtendedData`; source types are `automaid`, `earthscopeoceans`, and `mermaid-records`.
-
-Release notes are maintained in `CHANGELOG.md`.
+Generated KML includes concise provenance metadata: source type/reference,
+generation time, geometry product, number of GPS fixes, and selected limit.
+Trajectory KML uses distinct document-level styles for its historical line and
+emphasized latest position.

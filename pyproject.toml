@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mermaid-marinetraffic"
 dynamic = ["version"]
-description = "Prepare recent MERMAID GPS histories for MarineTraffic Custom Area imports."
+description = "Prepare MERMAID GPS trajectories for MarineTraffic Custom Area imports."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []

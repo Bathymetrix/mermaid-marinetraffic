@@ -1,12 +1,12 @@
-"""Winnow local MERMAID GPS position sources into import-ready KML."""
+"""Prepare MERMAID GPS trajectories and individual-point KML products."""
 
 from __future__ import annotations
 
 import argparse
-import heapq
 import json
 import os
 import re
+import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,11 +18,12 @@ GX_NS = "http://www.google.com/kml/ext/2.2"
 NS = {"k": KML_NS}
 DEFAULT_OUTPUT_ENVIRONMENT_VARIABLE = "MERMAID"
 DEFAULT_OUTPUT_SUBDIRECTORY = "marinetraffic"
+MARINETRAFFIC_MAX_KML_BYTES = 400_000
 
 
 @dataclass(frozen=True)
 class PositionRecord:
-    """One parsed GPS position, independent of its input source."""
+    """One validated GPS fix, independent of its input source."""
 
     timestamp: datetime
     latitude: str
@@ -32,16 +33,25 @@ class PositionRecord:
     def lat_lon(self) -> tuple[str, str]:
         return self.latitude, self.longitude
 
+    @property
+    def kml_coordinate(self) -> str:
+        return f"{self.longitude},{self.latitude},0"
+
+
+class KMLSizeError(RuntimeError):
+    """Raised when a rendered product exceeds MarineTraffic's file-size limit."""
+
 
 class GPSKMLWinnower:
-    def __init__(self, limit: int = 50) -> None:
+    def __init__(self, limit: int | None = None, max_kml_bytes: int = MARINETRAFFIC_MAX_KML_BYTES) -> None:
         self.limit = limit
+        self.max_kml_bytes = max_kml_bytes
         ET.register_namespace("", KML_NS)
         ET.register_namespace("gx", GX_NS)
 
     @staticmethod
-    def build_default_output_filename(station: str, source_tag: str) -> str:
-        return f"recent_gps_{station}_src-{source_tag}.kml"
+    def build_default_output_filename(station: str, source_tag: str, product: str) -> str:
+        return f"gps_{product}_{station}_src-{source_tag}.kml"
 
     @staticmethod
     def format_output_datetime(dt: datetime) -> str:
@@ -101,17 +111,18 @@ class GPSKMLWinnower:
         return Path(mermaid_root) / DEFAULT_OUTPUT_SUBDIRECTORY
 
     @staticmethod
-    def resolve_output_path(output_path: Path, station: str, source_tag: str) -> Path:
-        default_name = GPSKMLWinnower.build_default_output_filename(station, source_tag)
+    def resolve_output_path(output_path: Path, station: str, source_tag: str, product: str) -> Path:
+        filename = GPSKMLWinnower.build_default_output_filename(station, source_tag, product)
         if output_path.exists() and output_path.is_dir():
-            return output_path / default_name
+            return output_path / filename
         if output_path.suffix.lower() == ".kml":
             output_path.parent.mkdir(parents=True, exist_ok=True)
             return output_path
         output_path.mkdir(parents=True, exist_ok=True)
-        return output_path / default_name
+        return output_path / filename
 
-    def select_recent_unique(self, records: list[PositionRecord]) -> list[PositionRecord]:
+    def ordered_unique_records(self, records: list[PositionRecord]) -> list[PositionRecord]:
+        """Remove adjacent exact duplicates and return chronological GPS fixes."""
         deduped: list[PositionRecord] = []
         previous_key: tuple[datetime, tuple[str, str]] | None = None
         for record in records:
@@ -119,7 +130,12 @@ class GPSKMLWinnower:
             if key != previous_key:
                 deduped.append(record)
             previous_key = key
-        return heapq.nlargest(self.limit, deduped, key=lambda record: record.timestamp)
+        return sorted(deduped, key=lambda record: record.timestamp)
+
+    def select_records(self, records: list[PositionRecord]) -> list[PositionRecord]:
+        """Retain the configured number of most-recent unique GPS fixes."""
+        ordered = self.ordered_unique_records(records)
+        return ordered if self.limit is None else ordered[-self.limit:]
 
     def parse_kml(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
         root = ET.parse(input_path).getroot()
@@ -130,7 +146,7 @@ class GPSKMLWinnower:
         gps_folder = document.find("k:Folder[@id='GPS points']", NS)
         if not document_name or gps_folder is None:
             raise RuntimeError("KML lacks document name or GPS points folder")
-        records = []
+        records: list[PositionRecord] = []
         for placemark in gps_folder.findall("k:Placemark", NS):
             name = self.get_text(placemark.find("k:name", NS))
             coordinates = self.get_text(placemark.find(".//k:Point/k:coordinates", NS))
@@ -184,100 +200,175 @@ class GPSKMLWinnower:
             raise RuntimeError("No fix_position records found")
         return station, records
 
-    def write_records_to_kml(self, records: list[PositionRecord], station: str, output_path: Path, source_type: str, source_ref: str) -> None:
-        root = ET.Element(f"{{{KML_NS}}}kml")
-        document = ET.SubElement(root, f"{{{KML_NS}}}Document")
-        ET.SubElement(document, f"{{{KML_NS}}}name").text = station
-        ET.SubElement(document, f"{{{KML_NS}}}description").text = f"Generated from {source_type} input"
-        extended_data = ET.SubElement(document, f"{{{KML_NS}}}ExtendedData")
-        metadata = {"source_type": source_type, "source_ref": source_ref, "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": str(self.limit)}
-        for key, value in metadata.items():
-            data = ET.SubElement(extended_data, f"{{{KML_NS}}}Data", {"name": key})
-            ET.SubElement(data, f"{{{KML_NS}}}value").text = value
-        folder = ET.SubElement(document, f"{{{KML_NS}}}Folder", {"id": "GPS points"})
-        ET.SubElement(folder, f"{{{KML_NS}}}name").text = "GPS points"
-        for record in records:
-            placemark = ET.SubElement(folder, f"{{{KML_NS}}}Placemark")
-            ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{station} - {self.format_output_datetime(record.timestamp)}"
-            ET.SubElement(placemark, f"{{{KML_NS}}}visibility").text = "1"
-            ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl").text = "#markerStyle2"
-            point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
-            ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = f"{record.longitude},{record.latitude},0"
-        ET.indent(root, space="    ")
-        ET.ElementTree(root).write(output_path, encoding="UTF-8", xml_declaration=True)
-
-    def process_file(
-        self, input_path: Path, output_path: Path, source_type: str, source_tag: str
-    ) -> Path:
-        station, records = self.parse_source(input_path, source_type)
-        selected = self.select_recent_unique(records)
-        final_output = self.resolve_output_path(output_path, station, source_tag)
-        self.write_records_to_kml(selected, station, final_output, source_type, str(input_path))
-        print(f"Station code: {station}\nInput GPS records: {len(records)}\nWritten placemarks: {len(selected)}\nOutput: {final_output}")
-        return final_output
-
-    def parse_source(
-        self, input_path: Path, source_type: str
-    ) -> tuple[str, list[PositionRecord]]:
-        parser = {
+    def parse_source(self, input_path: Path, source_type: str) -> tuple[str, list[PositionRecord]]:
+        return {
             "automaid": self.parse_kml,
             "earthscopeoceans": self.parse_txt,
             "mermaid-records": self.parse_jsonl,
-        }[source_type]
-        return parser(input_path)
+        }[source_type](input_path)
 
-    def process_directory(
-        self, input_directory: Path, output_directory: Path, source_type: str, source_tag: str
-    ) -> list[Path]:
-        if not input_directory.is_dir():
-            raise RuntimeError(f"Not a directory: {input_directory}")
+    @staticmethod
+    def add_styles(document: ET.Element) -> None:
+        trajectory_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "trajectory"})
+        line_style = ET.SubElement(trajectory_style, f"{{{KML_NS}}}LineStyle")
+        ET.SubElement(line_style, f"{{{KML_NS}}}color").text = "ffcc6600"
+        ET.SubElement(line_style, f"{{{KML_NS}}}width").text = "3"
+        latest_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "latest-position"})
+        icon_style = ET.SubElement(latest_style, f"{{{KML_NS}}}IconStyle")
+        ET.SubElement(icon_style, f"{{{KML_NS}}}color").text = "ff00ffff"
+        ET.SubElement(icon_style, f"{{{KML_NS}}}scale").text = "1.8"
+        points_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "gps-point"})
+        ET.SubElement(ET.SubElement(points_style, f"{{{KML_NS}}}IconStyle"), f"{{{KML_NS}}}scale").text = "1"
+
+    def render_kml_bytes(self, records: list[PositionRecord], station: str, source_type: str, source_ref: str, product: str, generated_utc: str) -> bytes:
+        root = ET.Element(f"{{{KML_NS}}}kml")
+        document = ET.SubElement(root, f"{{{KML_NS}}}Document")
+        ET.SubElement(document, f"{{{KML_NS}}}name").text = f"{station} {product}"
+        ET.SubElement(document, f"{{{KML_NS}}}description").text = f"Generated from {source_type} input"
+        self.add_styles(document)
+        extended_data = ET.SubElement(document, f"{{{KML_NS}}}ExtendedData")
+        metadata = {
+            "source_type": source_type,
+            "source_ref": source_ref,
+            "generated_utc": generated_utc,
+            "geometry_type": product,
+            "gps_points": str(len(records)),
+            "limit": "all" if self.limit is None else str(self.limit),
+        }
+        for key, value in metadata.items():
+            data = ET.SubElement(extended_data, f"{{{KML_NS}}}Data", {"name": key})
+            ET.SubElement(data, f"{{{KML_NS}}}value").text = value
+
+        if product == "trajectory":
+            if len(records) >= 2:
+                trajectory = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
+                ET.SubElement(trajectory, f"{{{KML_NS}}}name").text = f"{station} trajectory"
+                ET.SubElement(trajectory, f"{{{KML_NS}}}styleUrl").text = "#trajectory"
+                line = ET.SubElement(trajectory, f"{{{KML_NS}}}LineString")
+                ET.SubElement(line, f"{{{KML_NS}}}coordinates").text = "\n".join(record.kml_coordinate for record in records)
+            if records:
+                latest = records[-1]
+                placemark = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
+                ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{station} - latest - {self.format_output_datetime(latest.timestamp)}"
+                ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl").text = "#latest-position"
+                point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
+                ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = latest.kml_coordinate
+        else:
+            for record in records:
+                placemark = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
+                ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{station} - {self.format_output_datetime(record.timestamp)}"
+                ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl").text = "#gps-point"
+                point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
+                ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = record.kml_coordinate
+
+        ET.indent(root, space="    ")
+        return ET.tostring(root, encoding="UTF-8", xml_declaration=True)
+
+    def maximum_fitting_limit(self, all_records: list[PositionRecord], station: str, source_type: str, source_ref: str, product: str, generated_utc: str) -> int:
+        low, high, best = 1, len(all_records), 0
+        while low <= high:
+            candidate = (low + high) // 2
+            data = self.render_kml_bytes(all_records[-candidate:], station, source_type, source_ref, product, generated_utc)
+            if len(data) <= self.max_kml_bytes:
+                best = candidate
+                low = candidate + 1
+            else:
+                high = candidate - 1
+        return best
+
+    def enforce_size(self, data: bytes, all_records: list[PositionRecord], station: str, source_type: str, source_ref: str, product: str, generated_utc: str) -> None:
+        if len(data) <= self.max_kml_bytes:
+            return
+        maximum = self.maximum_fitting_limit(all_records, station, source_type, source_ref, product, generated_utc)
+        product_name = "Trajectory" if product == "trajectory" else "Points"
+        message = (
+            f"{product_name} KML exceeds MarineTraffic's 400 KB file-size limit.\n\n"
+            f"KML size:           {len(data)} bytes\n"
+            f"Maximum size:       {self.max_kml_bytes} bytes\n"
+            f"GPS points:         {len(self.select_records(all_records))}\n"
+            f"Maximum GPS points: {maximum}"
+        )
+        if maximum:
+            message += f"\n\nRerun with --limit {maximum} or smaller."
+        else:
+            message += "\n\nEven one GPS fix cannot fit this KML representation."
+        raise KMLSizeError(message)
+
+    @staticmethod
+    def write_bytes_atomically(output_path: Path, data: bytes) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=output_path.parent, delete=False) as temporary:
+            temporary.write(data)
+            temporary_path = Path(temporary.name)
+        temporary_path.replace(output_path)
+
+    def prepare_product(self, input_path: Path, source_type: str, source_tag: str, product: str, output_path: Path, generated_utc: str) -> tuple[Path, bytes]:
+        station, parsed_records = self.parse_source(input_path, source_type)
+        all_records = self.ordered_unique_records(parsed_records)
+        selected_records = self.select_records(parsed_records)
+        if not selected_records:
+            raise RuntimeError(f"No valid GPS fixes found in {input_path}")
+        final_output = self.resolve_output_path(output_path, station, source_tag, product)
+        data = self.render_kml_bytes(selected_records, station, source_type, str(input_path), product, generated_utc)
+        self.enforce_size(data, all_records, station, source_type, str(input_path), product, generated_utc)
+        return final_output, data
+
+    def process_paths(self, input_path: Path, output_path: Path, source_type: str, source_tag: str, product: str) -> list[Path]:
         patterns = {
             "automaid": "position.kml",
             "earthscopeoceans": "*_all.txt",
             "mermaid-records": "log_gps_records.*.jsonl",
         }
-        parsed_inputs = [
-            (input_path, *self.parse_source(input_path, source_type))
-            for input_path in sorted(input_directory.rglob(patterns[source_type]))
+        is_directory = input_path.is_dir()
+        if is_directory:
+            if output_path.suffix.lower() == ".kml":
+                raise RuntimeError("Directory input requires -o to be a directory, not a .kml file.")
+            inputs = sorted(input_path.rglob(patterns[source_type]))
+            if not inputs:
+                raise RuntimeError(f"No matching {source_type} files under {input_path}")
+        elif input_path.is_file():
+            inputs = [input_path]
+        else:
+            raise RuntimeError(f"Not a file or directory: {input_path}")
+
+        generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        prepared = [
+            self.prepare_product(path, source_type, source_tag, product, output_path, generated_utc)
+            for path in inputs
         ]
-        if not parsed_inputs:
-            raise RuntimeError(f"No matching {source_type} files under {input_directory}")
+        output_paths = [path for path, _ in prepared]
+        if len(output_paths) != len(set(output_paths)):
+            raise RuntimeError("Multiple inputs would write the same flat output filename.")
+        for final_output, data in prepared:
+            self.write_bytes_atomically(final_output, data)
+            print(f"Output: {final_output} ({len(data)} bytes)")
+        return output_paths
 
-        planned_outputs: set[Path] = set()
-        for _, station, _ in parsed_inputs:
-            output_path = self.resolve_output_path(output_directory, station, source_tag)
-            if output_path in planned_outputs:
-                raise RuntimeError(f"Multiple inputs would write {output_path}")
-            planned_outputs.add(output_path)
 
-        outputs: list[Path] = []
-        for input_path, station, records in parsed_inputs:
-            output_path = self.resolve_output_path(output_directory, station, source_tag)
-            selected = self.select_recent_unique(records)
-            self.write_records_to_kml(selected, station, output_path, source_type, str(input_path))
-            print(f"Station code: {station}\nInput GPS records: {len(records)}\nWritten placemarks: {len(selected)}\nOutput: {output_path}")
-            outputs.append(output_path)
-        return outputs
+def positive_limit(value: str) -> int:
+    limit = int(value)
+    if limit <= 0:
+        raise argparse.ArgumentTypeError("--limit must be a positive number of GPS fixes")
+    return limit
 
 
 def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    file_parser = subparsers.add_parser("winnow_gps_file", help="Winnow one GPS file and write import-ready KML.", description="Winnow one local GPS source to recent unique points.")
-    configure_parser(file_parser, input_kind="file")
-    file_parser.set_defaults(handler=run_file)
-    directory_parser = subparsers.add_parser("winnow_gps_dir", help="Recursively winnow GPS files into a flat KML directory.", description="Recursively winnow one local GPS source family into a flat output directory.")
-    configure_parser(directory_parser, input_kind="directory")
-    directory_parser.set_defaults(handler=run_directory)
+    for product, help_text in (
+        ("trajectory", "Write trajectory KML with latest position."),
+        ("points", "Write KML containing individual GPS Point features."),
+    ):
+        parser = subparsers.add_parser(product, help=help_text)
+        configure_parser(parser)
+        parser.set_defaults(handler=run, product=product)
 
 
-def configure_parser(parser: argparse.ArgumentParser, input_kind: str) -> None:
+def configure_parser(parser: argparse.ArgumentParser) -> None:
     sources = parser.add_mutually_exclusive_group(required=True)
-    metavar = "FILE" if input_kind == "file" else "DIR"
-    location = "file" if input_kind == "file" else "directory"
-    sources.add_argument("--kml", type=Path, metavar=metavar, help=f"automaid {location}")
-    sources.add_argument("--txt", type=Path, metavar=metavar, help=f"EarthScopeOceans.org SOM {location}")
-    sources.add_argument("--jsonl", type=Path, metavar=metavar, help=f"mermaid-records GPS JSONL {location}")
+    sources.add_argument("--kml", type=Path, metavar="PATH", help="automaid position.kml file or directory")
+    sources.add_argument("--txt", type=Path, metavar="PATH", help="EarthScopeOceans.org SOM text file or directory")
+    sources.add_argument("--jsonl", type=Path, metavar="PATH", help="mermaid-records GPS JSONL file or directory")
     parser.add_argument("-o", "--output", type=Path, help="Output file or directory (default: $MERMAID/marinetraffic)")
-    parser.add_argument("--limit", type=int, default=50, help="Number of most recent points to keep")
+    parser.add_argument("--limit", type=positive_limit, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
 
 
 def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
@@ -291,21 +382,14 @@ def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
     raise RuntimeError("No input source selected")
 
 
-def run_file(args: argparse.Namespace) -> None:
-    winnower = GPSKMLWinnower(limit=args.limit)
-    output_path = args.output or winnower.default_output_directory()
+def run(args: argparse.Namespace) -> None:
     input_path, source_type, source_tag = selected_source(args)
-    winnower.process_file(input_path, output_path, source_type, source_tag)
-
-
-def run_directory(args: argparse.Namespace) -> None:
-    winnower = GPSKMLWinnower(limit=args.limit)
-    output_path = args.output or winnower.default_output_directory()
-    if output_path.suffix.lower() == ".kml":
-        raise SystemExit("winnow_gps_dir requires -o to be a directory, not a .kml file.")
-    input_path, source_type, source_tag = selected_source(args)
-    outputs = winnower.process_directory(input_path, output_path, source_type, source_tag)
-    print(f"Processed {len(outputs)} files.")
+    output_path = args.output or GPSKMLWinnower.default_output_directory()
+    outputs = GPSKMLWinnower(limit=args.limit).process_paths(
+        input_path, output_path, source_type, source_tag, args.product
+    )
+    if len(outputs) > 1:
+        print(f"Processed {len(outputs)} files.")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
