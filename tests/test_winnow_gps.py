@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from merinetraffic import __version__, cli, winnow_gps
+from mermaid_marinetraffic import __version__, cli, winnow_gps
 
 
 def test_top_level_help_lists_winnow_gps(capsys: pytest.CaptureFixture[str]) -> None:
@@ -34,6 +34,23 @@ def test_som_all_accepts_an_optional_station_code() -> None:
     args = cli.build_parser().parse_args(["winnow_gps", "--som-all", "P0041"])
 
     assert args.som_all == "P0041"
+
+
+def test_default_output_directory_uses_mermaid_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MERMAID", str(tmp_path))
+
+    assert winnow_gps.GPSKMLWinnower.default_output_directory() == tmp_path / "marinetraffic"
+
+
+def test_default_output_directory_requires_mermaid_environment(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MERMAID", raising=False)
+
+    with pytest.raises(RuntimeError, match="Set MERMAID"):
+        winnow_gps.GPSKMLWinnower.default_output_directory()
 
 
 def test_dispatches_to_winnow_gps(monkeypatch: pytest.MonkeyPatch) -> None:

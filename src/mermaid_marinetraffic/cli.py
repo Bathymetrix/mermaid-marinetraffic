@@ -1,4 +1,4 @@
-"""Top-level command dispatcher for merinetraffic."""
+"""Top-level command dispatcher for mermaid-marinetraffic."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from . import winnow_gps
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level command parser."""
     parser = argparse.ArgumentParser(
-        prog="merinetraffic",
+        prog="mermaid-marinetraffic",
         description="Prepare MERMAID position histories for MarineTraffic.",
     )
     parser.add_argument("--version", action="version", version=__version__)
@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Run the requested merinetraffic command."""
+    """Run the requested mermaid-marinetraffic command."""
     parser = build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "handler"):

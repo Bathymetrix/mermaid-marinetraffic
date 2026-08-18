@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import heapq
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -19,6 +20,8 @@ KML_NS = "http://www.opengis.net/kml/2.2"
 GX_NS = "http://www.google.com/kml/ext/2.2"
 NS = {"k": KML_NS}
 SOM_DEFAULT_URL = "https://geoweb.princeton.edu/people/simons/SOM/"
+DEFAULT_OUTPUT_ENVIRONMENT_VARIABLE = "MERMAID"
+DEFAULT_OUTPUT_SUBDIRECTORY = "marinetraffic"
 
 
 class LinkExtractor(HTMLParser):
@@ -90,6 +93,16 @@ class GPSKMLWinnower:
     @staticmethod
     def get_text(el: ET.Element | None) -> str:
         return (el.text or "").strip() if el is not None and el.text is not None else ""
+
+    @staticmethod
+    def default_output_directory() -> Path:
+        """Return the default output directory configured by ``MERMAID``."""
+        mermaid_root = os.environ.get(DEFAULT_OUTPUT_ENVIRONMENT_VARIABLE)
+        if not mermaid_root:
+            raise RuntimeError(
+                "Set MERMAID or provide -o/--output to choose an output location."
+            )
+        return Path(mermaid_root) / DEFAULT_OUTPUT_SUBDIRECTORY
 
     @staticmethod
     def resolve_output_path(
@@ -363,7 +376,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         "-o",
         "--output",
         type=Path,
-        help="Output path: file or directory (directory is auto-created)",
+        help="Output path; default directory is $MERMAID/marinetraffic",
     )
     parser.add_argument(
         "--som-all",
@@ -387,15 +400,12 @@ def run(args: argparse.Namespace) -> None:
     if args.som_all is not None:
         if args.input_kml or args.path:
             raise SystemExit("Use --som-all by itself (no input_kml or -p).")
-        if args.output is None:
-            output_dir = Path("som_last_50_kml")
-        elif args.output.suffix.lower() == ".kml":
+        output_path = args.output or winnower.default_output_directory()
+        if output_path.suffix.lower() == ".kml":
             raise SystemExit("--som-all requires -o as a directory, not a .kml file.")
-        else:
-            output_dir = args.output
 
         processed, skipped, skipped_files = winnower.process_online_som_all(
-            som_url=args.som_url, output_dir=output_dir, station=args.som_all or None
+            som_url=args.som_url, output_dir=output_path, station=args.som_all or None
         )
         print(f"\nDone. Processed: {processed}, Skipped: {skipped}")
         if skipped_files:
@@ -407,8 +417,9 @@ def run(args: argparse.Namespace) -> None:
     if args.path:
         if args.input_kml:
             raise SystemExit("Do not pass positional input_kml when using -p.")
+        output_path = args.output or winnower.default_output_directory()
         processed, skipped, skipped_dirs = winnower.process_kml_directory(
-            args.path, output_dir=args.output
+            args.path, output_dir=output_path
         )
         print(f"\nDone. Processed: {processed}, Skipped: {skipped}")
         if skipped_dirs:
@@ -420,13 +431,14 @@ def run(args: argparse.Namespace) -> None:
     if not args.input_kml:
         raise SystemExit("Provide input_kml, or use -p, or use --som-all.")
 
-    winnower.process_kml_file(args.input_kml, args.output)
+    output_path = args.output or winnower.default_output_directory()
+    winnower.process_kml_file(args.input_kml, output_path)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     """Run ``winnow_gps`` directly as a module-level command."""
     parser = argparse.ArgumentParser(
-        prog="merinetraffic winnow_gps",
+        prog="mermaid-marinetraffic winnow_gps",
         description="Winnow KML to the most recent unique GPS points.",
     )
     configure_parser(parser)

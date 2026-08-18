@@ -2,7 +2,7 @@
 
 ## Project scope
 
-- `merinetraffic` is an installable Python package with the public CLI form `merinetraffic <command> [options]`.
+- `mermaid-marinetraffic` is an installable Python package with the public CLI form `mermaid-marinetraffic <command> [options]`.
 - Command names are process-oriented. `winnow_gps` owns the existing GPS-winnowing behavior.
 - Use Python 3.12 or later unless broader instructions require a specific runtime.
 - Keep this a small standard-library package unless the task establishes a concrete need for a larger structure.

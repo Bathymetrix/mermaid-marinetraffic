@@ -1,6 +1,6 @@
-# merinetraffic
+# mermaid-marinetraffic
 
-`merinetraffic` prepares recent MERMAID GPS histories for MarineTraffic Custom Area imports. The `winnow_gps` command removes adjacent duplicate fixes, retains the most recent points, and writes import-ready KML.
+`mermaid-marinetraffic` prepares recent MERMAID GPS histories for MarineTraffic Custom Area imports. The `winnow_gps` command removes adjacent duplicate fixes, retains the most recent points, and writes import-ready KML.
 
 The included `position.kml` is a representative local KML input.
 
@@ -20,17 +20,20 @@ If a suitable virtual environment is already active, install directly with:
 python -m pip install -e .
 ```
 
-The installed interface is `merinetraffic <command> [options]`.
+The installed interface is `mermaid-marinetraffic <command> [options]`.
 
 ```bash
-merinetraffic --help
-merinetraffic --version
-merinetraffic winnow_gps --help
+mermaid-marinetraffic --help
+mermaid-marinetraffic --version
+mermaid-marinetraffic winnow_gps --help
+
+# Equivalent module interface
+python -m mermaid_marinetraffic --help
 ```
 
 ## Winnow GPS histories
 
-`merinetraffic winnow_gps` supports three input modes:
+`mermaid-marinetraffic winnow_gps` supports three input modes:
 
 - **Single local KML:** pass a KML file.
 - **Local batch:** use `-p/--path` with a parent directory whose station subdirectories may contain `position.kml`.
@@ -38,14 +41,14 @@ merinetraffic winnow_gps --help
 
 ```bash
 # Process one KML file
-merinetraffic winnow_gps position.kml
+mermaid-marinetraffic winnow_gps position.kml
 
 # Process station directories beneath a parent directory
-merinetraffic winnow_gps --path stations_parent
+mermaid-marinetraffic winnow_gps --path stations_parent
 
 # Fetch every SOM station, or one named station
-merinetraffic winnow_gps --som-all
-merinetraffic winnow_gps --som-all P0041
+mermaid-marinetraffic winnow_gps --som-all
+mermaid-marinetraffic winnow_gps --som-all P0041
 ```
 
 For local KML inputs, only placemarks in `<Folder id="GPS points">` are processed. Adjacent records are duplicates only when both datetime and latitude/longitude match. The command retains the most recent records after deduplication.
@@ -57,15 +60,15 @@ Station codes are derived from local document names as five characters; for exam
 ```text
 input_kml          KML file for single-file mode
 -p, --path PATH    Parent directory for local batch mode
--o, --output PATH  Output file or directory, depending on mode
+-o, --output PATH  Output file or directory (default: $MERMAID/marinetraffic)
 --som-all [CODE]   Process all SOM files, optionally one station
 --som-url URL      SOM index URL (default: https://geoweb.princeton.edu/people/simons/SOM/)
 --limit N          Number of most recent unique points to keep (default: 50)
 ```
 
-By default, single-file mode writes beside its input and local batch mode writes in each station directory. In single-file mode, `-o` may be a `.kml` output filename; in either local mode it may be an output directory. Directories are created as needed.
+Without `-o`, all modes write to `$MERMAID/marinetraffic`, creating that directory as needed. Set `MERMAID` or provide `-o` explicitly. In single-file mode, `-o` may be a `.kml` output filename; in either local mode it may be an output directory.
 
-SOM batch mode writes to `som_last_50_kml` by default, and its `-o` value must be a directory.
+SOM batch mode requires `-o` to be a directory when it is supplied.
 
 Output names identify the source:
 
