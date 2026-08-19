@@ -84,6 +84,10 @@ class GPSKMLWinnower:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
 
     @staticmethod
+    def parse_vit_datetime(text: str) -> datetime:
+        return datetime.strptime(text, "%Y%m%d-%Hh%Mmn%S")
+
+    @staticmethod
     def parse_lat_lon(coords_text: str) -> tuple[str, str]:
         parts = [part.strip() for part in coords_text.strip().split(",")]
         if len(parts) < 2:
@@ -200,11 +204,42 @@ class GPSKMLWinnower:
             raise RuntimeError("No fix_position records found")
         return station, records
 
+    def parse_vit(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
+        serial_id = input_path.stem
+        station_match = re.fullmatch(r"([A-Z])(\d+)", serial_id)
+        station = (
+            f"{station_match.group(1)}{int(station_match.group(2)):04d}"
+            if station_match is not None
+            else self.extract_station_code(serial_id)
+        )
+        position_line = re.compile(
+            r"^(\d{8}-\d{2}h\d{2}mn\d{2}):\s*"
+            r"([NS]\d+deg\d+(?:\.\d+)?mn),\s*"
+            r"([EW]\d+deg\d+(?:\.\d+)?mn)$"
+        )
+        records: list[PositionRecord] = []
+        for raw_line in input_path.read_text(encoding="utf-8").splitlines():
+            match = position_line.fullmatch(raw_line.strip())
+            if match is None:
+                continue
+            timestamp, latitude, longitude = match.groups()
+            records.append(
+                PositionRecord(
+                    self.parse_vit_datetime(timestamp),
+                    self.parse_degrees_minutes(latitude),
+                    self.parse_degrees_minutes(longitude),
+                )
+            )
+        if not records:
+            raise RuntimeError(f"No GPS position lines found in {input_path}")
+        return station, records
+
     def parse_source(self, input_path: Path, source_type: str) -> tuple[str, list[PositionRecord]]:
         return {
             "automaid": self.parse_kml,
             "earthscopeoceans": self.parse_txt,
             "mermaid-records": self.parse_jsonl,
+            "vit": self.parse_vit,
         }[source_type](input_path)
 
     @staticmethod
@@ -318,6 +353,7 @@ class GPSKMLWinnower:
             "automaid": "position.kml",
             "earthscopeoceans": "*_all.txt",
             "mermaid-records": "log_gps_records.*.jsonl",
+            "vit": "*.vit",
         }
         is_directory = input_path.is_dir()
         if is_directory:
@@ -364,6 +400,7 @@ def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser])
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--vit", type=Path, metavar="PATH", help="preferred MERMAID .vit file or directory")
     sources.add_argument("--kml", type=Path, metavar="PATH", help="automaid position.kml file or directory")
     sources.add_argument("--txt", type=Path, metavar="PATH", help="EarthScopeOceans.org SOM text file or directory")
     sources.add_argument("--jsonl", type=Path, metavar="PATH", help="mermaid-records GPS JSONL file or directory")
@@ -373,6 +410,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
     for input_path, source_type, source_tag in (
+        (args.vit, "vit", "vit"),
         (args.kml, "automaid", "kml"),
         (args.txt, "earthscopeoceans", "txt"),
         (args.jsonl, "mermaid-records", "jsonl"),

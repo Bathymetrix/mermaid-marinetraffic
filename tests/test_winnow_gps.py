@@ -99,12 +99,28 @@ def test_json_coordinate_and_identity_parsing() -> None:
     assert parsed[0].longitude == "7.319400"
 
 
+def test_vit_timestamp_coordinate_and_filename_station_parsing() -> None:
+    station, parsed = winnow_gps.GPSKMLWinnower().parse_vit(
+        FIXTURES / "452.020-P-21.vit"
+    )
+    assert station == "P0021"
+    assert parsed == [
+        winnow_gps.PositionRecord(
+            datetime(2018, 6, 28, 7, 22, 36), "43.108067", "6.038067"
+        ),
+        winnow_gps.PositionRecord(
+            datetime(2018, 8, 17, 0, 30, 6), "-17.566667", "-149.574500"
+        ),
+    ]
+
+
 @pytest.mark.parametrize(
     ("option", "fixture_name", "source_type"),
     [
         ("--kml", "P0021_position.kml", "automaid"),
         ("--txt", "P0021_all.txt", "earthscopeoceans"),
         ("--jsonl", "log_gps_records.452.020-P-21.jsonl", "mermaid-records"),
+        ("--vit", "452.020-P-21.vit", "vit"),
     ],
 )
 def test_trajectory_accepts_each_file_source(tmp_path: Path, option: str, fixture_name: str, source_type: str) -> None:

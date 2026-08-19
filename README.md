@@ -43,8 +43,14 @@ mermaid-marinetraffic trajectory --jsonl "$MERMAID/records/452.020-P-21/log_gps_
 mermaid-marinetraffic points --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl"
 ```
 
-All commands require exactly one input source:
+All commands require exactly one input source. Prefer `--vit` when it is
+available: if a float's `.cmd` file specifies `upload 0`, its VIT file is the
+only location source because no GPS-bearing MER, LOG, or BIN files are
+uploaded. Unlike `--txt`, which obtains comparable date and location data from
+the SOM service, `--vit` reads a local file and does not require an internet
+connection.
 
+- `--vit PATH`: a MERMAID `<serial_id>.vit` log file.
 - `--kml PATH`: automaid `position.kml`, for example
   `$MERMAID/processed_everyone/452.020-P-21/position.kml`.
 - `--txt PATH`: EarthScopeOceans.org SOM text, for example
@@ -53,8 +59,8 @@ All commands require exactly one input source:
   `$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl`.
 
 Each `PATH` can be a file or a directory. Directory inputs are recursive and
-discover only `position.kml`, `*_all.txt`, or
-`log_gps_records.*.jsonl`, respectively. Batch outputs are flat and the
+discover only `position.kml`, `*_all.txt`, `log_gps_records.*.jsonl`, or
+`*.vit`, respectively. Batch outputs are flat and the
 command stops if two inputs would have the same destination filename.
 
 KML input uses only `<Folder id="GPS points">`. JSONL uses only
@@ -83,9 +89,11 @@ directory.
 gps_trajectory_<STATION>_src-kml.kml
 gps_trajectory_<STATION>_src-txt.kml
 gps_trajectory_<STATION>_src-jsonl.kml
+gps_trajectory_<STATION>_src-vit.kml
 gps_points_<STATION>_src-kml.kml
 gps_points_<STATION>_src-txt.kml
 gps_points_<STATION>_src-jsonl.kml
+gps_points_<STATION>_src-vit.kml
 ```
 
 Generated KML includes concise provenance metadata: source type/reference,
