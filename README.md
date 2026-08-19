@@ -46,14 +46,13 @@ mermaid-marinetraffic points --jsonl "$MERMAID/records/452.020-P-21/log_gps_reco
 All commands require exactly one input source. Prefer `--vit` when it is
 available: if a float's `.cmd` file specifies `upload 0`, its VIT file is the
 only location source because no GPS-bearing MER, LOG, or BIN files are
-uploaded. Unlike `--txt`, which obtains comparable date and location data from
-the SOM service, `--vit` reads a local file and does not require an internet
-connection.
+uploaded. Both `--vit` and `--eso` read local files; neither requires an
+internet connection.
 
 - `--vit PATH`: a MERMAID `<serial_id>.vit` log file.
 - `--kml PATH`: automaid `position.kml`, for example
   `$MERMAID/processed_everyone/452.020-P-21/position.kml`.
-- `--txt PATH`: EarthScopeOceans.org SOM text, for example
+- `--eso PATH`: ESO (EarthScope-Oceans) local location file, for example
   `$MERMAID/esoloc/P0021_all.txt`.
 - `--jsonl PATH`: mermaid-records GPS JSONL, for example
   `$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl`.
@@ -87,11 +86,11 @@ directory.
 
 ```text
 gps_trajectory_<STATION>_src-kml.kml
-gps_trajectory_<STATION>_src-txt.kml
+gps_trajectory_<STATION>_src-eso.kml
 gps_trajectory_<STATION>_src-jsonl.kml
 gps_trajectory_<STATION>_src-vit.kml
 gps_points_<STATION>_src-kml.kml
-gps_points_<STATION>_src-txt.kml
+gps_points_<STATION>_src-eso.kml
 gps_points_<STATION>_src-jsonl.kml
 gps_points_<STATION>_src-vit.kml
 ```

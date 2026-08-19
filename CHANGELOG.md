@@ -11,7 +11,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Replaced `winnow_gps_file` and `winnow_gps_dir` with product-oriented `trajectory` and `points` commands that accept either a source file or recursively discovered source directory.
 - Made complete deduplicated GPS history the default and added explicit serialized 400,000-byte MarineTraffic KML enforcement with maximum-fitting `--limit` diagnostics.
 - Changed the primary KML product to a styled chronological trajectory LineString plus a separate latest-position Point; retained individual Point output as `points`.
-- Replaced positional, batch, and online GPS inputs with required local `--kml`, `--txt`, and `--jsonl` sources.
+- Replaced positional, batch, and online GPS inputs with required local `--kml`, `--eso`, and `--jsonl` sources.
 - Unified all source parsers into shared deduplication, recent-N selection, and KML writing; KML provenance now identifies `automaid`, EarthScopeOceans.org, or `mermaid-records`.
 - Simplified repository instructions, documentation, and local-file ignore rules.
 - Added focused tests for deterministic KML winnowing behavior.
@@ -30,10 +30,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## [0.1.1] - 2026-03-05
 
 ### Changed
-- Output placemark datetime format is now `DD-Mon-YYYY HH:MM` (for both KML and SOM input flows).
+- Output placemark datetime format is now `DD-Mon-YYYY HH:MM` (for both KML and ESO input flows).
 - Output filename source separator uses a single underscore before source tag:
   - `last_50_gps_<STATION>_src-kml.kml`
-  - `last_50_gps_<STATION>_src-som-all.kml`
+  - `last_50_gps_<STATION>_src-eso.kml`
 - Script is now named `gps_winnower.py` in usage/docs.
 
 ## [0.1.0] - 2026-03-04
@@ -42,10 +42,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Standalone `gps_winnower.py` CLI supporting:
   - single-file KML input mode
   - local batch directory mode (`-p`)
-  - online SOM `_all.txt` mode (`--som-all`, `--som-url`)
+  - online EarthScope-Oceans `_all.txt` mode
 - Last-N unique point selection (default `--limit 50`) with adjacent duplicate removal.
 - Source-tagged output naming:
   - `last_50_gps_<STATION>_src-kml.kml`
-  - `last_50_gps_<STATION>_src-som-all.kml`
+  - `last_50_gps_<STATION>_src-eso.kml`
 - Embedded output provenance metadata (`source_type`, `source_ref`, `generated_utc`, `limit`).
 - CLI version reporting via `--version`, sourced from `VERSION`.

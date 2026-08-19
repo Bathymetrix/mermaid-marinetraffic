@@ -118,7 +118,7 @@ def test_vit_timestamp_coordinate_and_filename_station_parsing() -> None:
     ("option", "fixture_name", "source_type"),
     [
         ("--kml", "P0021_position.kml", "automaid"),
-        ("--txt", "P0021_all.txt", "earthscopeoceans"),
+        ("--eso", "P0021_all.txt", "earthscopeoceans"),
         ("--jsonl", "log_gps_records.452.020-P-21.jsonl", "mermaid-records"),
         ("--vit", "452.020-P-21.vit", "vit"),
     ],
@@ -144,7 +144,7 @@ def test_directory_source_writes_flat_trajectory_output(tmp_path: Path) -> None:
 
 def test_points_command_writes_points_product(tmp_path: Path) -> None:
     output = tmp_path / "points.kml"
-    cli.main(["points", "--txt", str(FIXTURES / "P0021_all.txt"), "-o", str(output), "--limit", "2"])
+    cli.main(["points", "--eso", str(FIXTURES / "P0021_all.txt"), "-o", str(output), "--limit", "2"])
     assert len(ET.parse(output).getroot().findall(".//k:Point", NS)) == 2
 
 

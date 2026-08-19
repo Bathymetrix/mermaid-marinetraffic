@@ -76,7 +76,7 @@ class GPSKMLWinnower:
         raise ValueError(f"Unrecognized datetime format: {name_text!r}")
 
     @staticmethod
-    def parse_som_datetime(text: str) -> datetime:
+    def parse_eso_datetime(text: str) -> datetime:
         return datetime.strptime(text.strip(), "%d-%b-%Y %H:%M:%S")
 
     @staticmethod
@@ -159,7 +159,7 @@ class GPSKMLWinnower:
                 records.append(PositionRecord(self.parse_point_datetime(name), latitude, longitude))
         return self.extract_station_code(document_name), records
 
-    def parse_txt(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
+    def parse_eso(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
         station: str | None = None
         records: list[PositionRecord] = []
         for raw_line in input_path.read_text(encoding="utf-8").splitlines():
@@ -167,13 +167,13 @@ class GPSKMLWinnower:
             if not parts:
                 continue
             if len(parts) < 5:
-                raise ValueError(f"Invalid EarthScopeOceans.org SOM row: {raw_line!r}")
+                raise ValueError(f"Invalid EarthScope-Oceans row: {raw_line!r}")
             if station is not None and parts[0] != station:
-                raise ValueError("EarthScopeOceans.org SOM file contains multiple stations")
+                raise ValueError("EarthScope-Oceans file contains multiple stations")
             station = parts[0]
-            records.append(PositionRecord(self.parse_som_datetime(f"{parts[1]} {parts[2]}"), parts[3], parts[4]))
+            records.append(PositionRecord(self.parse_eso_datetime(f"{parts[1]} {parts[2]}"), parts[3], parts[4]))
         if station is None:
-            raise RuntimeError("No EarthScopeOceans.org SOM records found")
+            raise RuntimeError("No EarthScope-Oceans records found")
         return station, records
 
     def parse_jsonl(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
@@ -237,7 +237,7 @@ class GPSKMLWinnower:
     def parse_source(self, input_path: Path, source_type: str) -> tuple[str, list[PositionRecord]]:
         return {
             "automaid": self.parse_kml,
-            "earthscopeoceans": self.parse_txt,
+            "earthscopeoceans": self.parse_eso,
             "mermaid-records": self.parse_jsonl,
             "vit": self.parse_vit,
         }[source_type](input_path)
@@ -402,7 +402,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     sources = parser.add_mutually_exclusive_group(required=True)
     sources.add_argument("--vit", type=Path, metavar="PATH", help="preferred MERMAID .vit file or directory")
     sources.add_argument("--kml", type=Path, metavar="PATH", help="automaid position.kml file or directory")
-    sources.add_argument("--txt", type=Path, metavar="PATH", help="EarthScopeOceans.org SOM text file or directory")
+    sources.add_argument("--eso", type=Path, metavar="PATH", help="ESO (EarthScope-Oceans) local file or directory")
     sources.add_argument("--jsonl", type=Path, metavar="PATH", help="mermaid-records GPS JSONL file or directory")
     parser.add_argument("-o", "--output", type=Path, help="Output file or directory (default: $MERMAID/marinetraffic)")
     parser.add_argument("--limit", type=positive_limit, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
@@ -412,7 +412,7 @@ def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
     for input_path, source_type, source_tag in (
         (args.vit, "vit", "vit"),
         (args.kml, "automaid", "kml"),
-        (args.txt, "earthscopeoceans", "txt"),
+        (args.eso, "earthscopeoceans", "eso"),
         (args.jsonl, "mermaid-records", "jsonl"),
     ):
         if input_path is not None:
