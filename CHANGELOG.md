@@ -7,6 +7,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## Unreleased
 
 ### Changed
+- Added `GPSINFO` fixes from `mer_environment_records.*.jsonl` to the JSONL GPS input.
 - Added local MERMAID `.vit` GPS input support for trajectory and Point products.
 - Replaced `winnow_gps_file` and `winnow_gps_dir` with product-oriented `trajectory` and `points` commands that accept either a source file or recursively discovered source directory.
 - Made complete deduplicated GPS history the default and added explicit serialized 400,000-byte MarineTraffic KML enforcement with maximum-fitting `--limit` diagnostics.

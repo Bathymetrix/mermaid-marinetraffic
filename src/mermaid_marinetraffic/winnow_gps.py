@@ -104,6 +104,14 @@ class GPSKMLWinnower:
         return f"{-value if direction in {'S', 'W'} else value:.6f}"
 
     @staticmethod
+    def parse_mer_coordinate(text: str, degrees_width: int) -> str:
+        match = re.fullmatch(r"([+-])(\d{" + str(degrees_width) + r"})(\d+\.\d+)", text)
+        if match is None:
+            raise ValueError(f"Invalid MER coordinate: {text!r}")
+        sign, degrees, minutes = match.groups()
+        value = int(degrees) + float(minutes) / 60
+        return f"{-value if sign == '-' else value:.6f}"
+    @staticmethod
     def get_text(el: ET.Element | None) -> str:
         return (el.text or "").strip() if el is not None and el.text is not None else ""
 
@@ -177,31 +185,68 @@ class GPSKMLWinnower:
         return station, records
 
     def parse_jsonl(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
+        input_paths = [input_path]
+        companion = self.jsonl_companion_path(input_path)
+        if companion != input_path and companion.exists():
+            input_paths.append(companion)
+        return self.parse_jsonl_paths(input_paths)
+
+    @staticmethod
+    def jsonl_companion_path(input_path: Path) -> Path:
+        if input_path.name.startswith("log_gps_records"):
+            return input_path.with_name(input_path.name.replace("log_gps_records", "mer_environment_records", 1))
+        if input_path.name.startswith("mer_environment_records"):
+            return input_path.with_name(input_path.name.replace("mer_environment_records", "log_gps_records", 1))
+        return input_path
+
+    def parse_jsonl_paths(self, input_paths: list[Path]) -> tuple[str, list[PositionRecord]]:
         station: str | None = None
         records: list[PositionRecord] = []
-        for line_number, raw_line in enumerate(input_path.read_text(encoding="utf-8").splitlines(), 1):
-            if not raw_line.strip():
-                continue
-            entry = json.loads(raw_line)
-            if entry.get("gps_record_kind") != "fix_position":
-                continue
-            raw_values = entry.get("raw_values")
-            serial, instrument_id = entry.get("instrument_serial"), entry.get("instrument_id")
-            if not isinstance(raw_values, dict) or not isinstance(serial, str) or not isinstance(instrument_id, str):
-                raise ValueError(f"JSONL line {line_number} lacks GPS position or instrument identity")
-            serial_station = self.extract_station_code(serial)
-            match = re.fullmatch(r"([A-Z])(\d+)", instrument_id)
-            if match is None:
-                raise ValueError(f"Invalid instrument_id on JSONL line {line_number}: {instrument_id!r}")
-            id_station = f"{match.group(1)}{int(match.group(2)):04d}"
-            if serial_station != id_station:
-                raise ValueError(f"Instrument identity mismatch on JSONL line {line_number}")
-            if station is not None and station != id_station:
-                raise ValueError("mermaid-records JSONL contains multiple stations")
-            station = id_station
-            records.append(PositionRecord(self.parse_record_datetime(entry["record_time"]), self.parse_degrees_minutes(raw_values["latitude"]), self.parse_degrees_minutes(raw_values["longitude"])))
+        for current_path in input_paths:
+            is_environment = current_path.name.startswith("mer_environment_records")
+            for line_number, raw_line in enumerate(current_path.read_text(encoding="utf-8").splitlines(), 1):
+                if not raw_line.strip():
+                    continue
+                entry = json.loads(raw_line)
+                if is_environment:
+                    if entry.get("environment_kind") != "gpsinfo":
+                        continue
+                elif entry.get("gps_record_kind") != "fix_position":
+                    continue
+                raw_values = entry.get("raw_values")
+                serial, instrument_id = entry.get("instrument_serial"), entry.get("instrument_id")
+                if not isinstance(raw_values, dict) or not isinstance(serial, str) or not isinstance(instrument_id, str):
+                    raise ValueError(f"JSONL line {line_number} in {current_path} lacks GPS position or instrument identity")
+                serial_station = self.extract_station_code(serial)
+                match = re.fullmatch(r"([A-Z])(\d+)", instrument_id)
+                if match is None:
+                    raise ValueError(f"Invalid instrument_id on JSONL line {line_number}: {instrument_id!r}")
+                id_station = f"{match.group(1)}{int(match.group(2)):04d}"
+                if serial_station != id_station:
+                    raise ValueError(f"Instrument identity mismatch on JSONL line {line_number}")
+                if station is not None and station != id_station:
+                    raise ValueError("mermaid-records JSONL contains multiple stations")
+                station = id_station
+                if is_environment:
+                    timestamp = entry.get("gpsinfo_date") or raw_values.get("date")
+                    latitude, longitude = raw_values.get("lat"), raw_values.get("lon")
+                    if not all(isinstance(value, str) for value in (timestamp, latitude, longitude)):
+                        raise ValueError(f"GPSINFO record on JSONL line {line_number} lacks date, lat, or lon")
+                    records.append(PositionRecord(
+                        self.parse_record_datetime(timestamp),
+                        self.parse_mer_coordinate(latitude, degrees_width=2),
+                        self.parse_mer_coordinate(longitude, degrees_width=3),
+                    ))
+                else:
+                    records.append(PositionRecord(
+                        self.parse_record_datetime(entry["record_time"]),
+                        self.parse_degrees_minutes(raw_values["latitude"]),
+                        self.parse_degrees_minutes(raw_values["longitude"]),
+                    ))
         if station is None:
-            raise RuntimeError("No fix_position records found")
+            raise RuntimeError("No GPS records found")
+        if not records:
+            raise RuntimeError("No fix_position or GPSINFO records found")
         return station, records
 
     def parse_vit(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
@@ -359,7 +404,15 @@ class GPSKMLWinnower:
         if is_directory:
             if output_path.suffix.lower() == ".kml":
                 raise RuntimeError("Directory input requires -o to be a directory, not a .kml file.")
-            inputs = sorted(input_path.rglob(patterns[source_type]))
+            if source_type == "mermaid-records":
+                log_paths = sorted(input_path.rglob("log_gps_records.*.jsonl"))
+                environment_paths = sorted(input_path.rglob("mer_environment_records.*.jsonl"))
+                inputs = log_paths + [
+                    path for path in environment_paths
+                    if self.jsonl_companion_path(path) not in log_paths
+                ]
+            else:
+                inputs = sorted(input_path.rglob(patterns[source_type]))
             if not inputs:
                 raise RuntimeError(f"No matching {source_type} files under {input_path}")
         elif input_path.is_file():

@@ -58,13 +58,16 @@ internet connection.
   `$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl`.
 
 Each `PATH` can be a file or a directory. Directory inputs are recursive and
-discover only `position.kml`, `*_all.txt`, `log_gps_records.*.jsonl`, or
-`*.vit`, respectively. Batch outputs are flat and the
+discover only `position.kml`, `*_all.txt`, `log_gps_records.*.jsonl` with
+its optional `mer_environment_records.*.jsonl` companion, or `*.vit`,
+respectively. Batch outputs are flat and the
 command stops if two inputs would have the same destination filename.
 
-KML input uses only `<Folder id="GPS points">`. JSONL uses only
-`gps_record_kind == "fix_position"`, validates instrument identity, and
-converts N/S/E/W degree/minute coordinates to decimal degrees.
+KML input uses only `<Folder id="GPS points">`. JSONL uses
+`gps_record_kind == "fix_position"` and `environment_kind == "gpsinfo"`,
+validates instrument identity, and converts both supported coordinate formats
+to decimal degrees. When present, the same-serial
+`mer_environment_records.*.jsonl` companion is incorporated automatically.
 
 ## History selection and size limit
 

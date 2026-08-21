@@ -1,6 +1,7 @@
 """Focused tests for trajectory and individual-point KML products."""
 
 from datetime import datetime
+import json
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -97,6 +98,30 @@ def test_json_coordinate_and_identity_parsing() -> None:
     assert parsed[0].timestamp == datetime(2018, 6, 13, 9, 49, 48)
     assert parsed[0].latitude == "43.682650"
     assert parsed[0].longitude == "7.319400"
+
+
+def test_jsonl_incorporates_mer_environment_gpsinfo(tmp_path: Path) -> None:
+    identity = {"instrument_id": "P0021", "instrument_serial": "452.020-P-21"}
+    log_path = tmp_path / "log_gps_records.452.020-P-21.jsonl"
+    environment_path = tmp_path / "mer_environment_records.452.020-P-21.jsonl"
+    log_path.write_text(json.dumps({
+        **identity, "gps_record_kind": "fix_position",
+        "record_time": "2024-02-07T22:47:20.000000Z",
+        "raw_values": {"latitude": "N28deg45.600mn", "longitude": "E138deg48.000mn"},
+    }) + "\n", encoding="utf-8")
+    environment_path.write_text(json.dumps({
+        **identity, "environment_kind": "gpsinfo",
+        "gpsinfo_date": "2024-02-07T22:47:22.000000Z",
+        "raw_values": {"date": "2024-02-07T22:47:22", "lat": "+2845.7300", "lon": "+13848.3010"},
+    }) + "\n", encoding="utf-8")
+
+    station, parsed = winnow_gps.GPSKMLWinnower().parse_jsonl(log_path)
+
+    assert station == "P0021"
+    assert [(record.timestamp, record.latitude, record.longitude) for record in parsed] == [
+        (datetime(2024, 2, 7, 22, 47, 20), "28.760000", "138.800000"),
+        (datetime(2024, 2, 7, 22, 47, 22), "28.762167", "138.805017"),
+    ]
 
 
 def test_vit_timestamp_coordinate_and_filename_station_parsing() -> None:
