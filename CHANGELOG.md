@@ -7,6 +7,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## Unreleased
 
 ### Changed
+- Bumped the package version to 0.2.0 for the trajectory-product and input-source interface changes.
 - Added `GPSINFO` fixes from `mer_environment_records.*.jsonl` to the JSONL GPS input.
 - Added local MERMAID `.vit` GPS input support for trajectory and Point products.
 - Replaced `winnow_gps_file` and `winnow_gps_dir` with product-oriented `trajectory` and `points` commands that accept either a source file or recursively discovered source directory.

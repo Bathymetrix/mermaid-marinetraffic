@@ -1,5 +1,21 @@
 # AGENTS.md
 
+## Instruction sources
+
+These instructions supplement:
+
+- the global Codex AGENTS (`~/.codex/AGENTS.md`)
+- the shared MERMAID AGENTS (`$MERMAID/AGENTS.md`)
+
+Before beginning work, read and follow:
+
+- `$MERMAID/AGENTS.md`
+
+If you cannot locate, read, or understand the shared MERMAID AGENTS, stop and
+tell the user before proceeding. Do not silently continue using only this file.
+
+If instructions conflict, this file takes precedence.
+
 ## Project scope
 
 - `mermaid-marinetraffic` is an installable Python package with the public CLI form `mermaid-marinetraffic <command> [options]`.
@@ -20,5 +36,6 @@
 
 - Keep `CHANGELOG.md` accurate; use an `Unreleased` section for unreleased changes rather than creating a version or rewriting released history.
 - Keep package version metadata authoritative and available when installed.
+- Bump the package version for externally visible behavior changes and record the change under `Unreleased`.
 - Do not stage, commit, amend, push, rebase, or otherwise modify Git history unless explicitly authorized.
 - Use Git-aware moves and renames when appropriate.
