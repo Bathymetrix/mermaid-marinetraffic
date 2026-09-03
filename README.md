@@ -57,6 +57,12 @@ internet connection.
 - `--jsonl PATH`: mermaid-records GPS JSONL, for example
   `$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl`.
 
+VIT files are float-derived operational data assembled by the float itself,
+not first-class source records. This tool therefore scans them only for
+GPS-like timestamp/coordinate lines and ignores all other content, including
+malformed text. It does not attempt lossless VIT preservation; use
+`mermaid-records` for the first-class BIN, LOG, and MER record families.
+
 Each `PATH` can be a file or a directory. Directory inputs are recursive and
 discover only `position.kml`, `*_all.txt`, `log_gps_records.*.jsonl` with
 its optional `mer_environment_records.*.jsonl` companion, or `*.vit`,

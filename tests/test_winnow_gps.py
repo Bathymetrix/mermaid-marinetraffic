@@ -139,6 +139,23 @@ def test_vit_timestamp_coordinate_and_filename_station_parsing() -> None:
     ]
 
 
+def test_vit_ignores_invalid_utf8_outside_gps_lines(tmp_path: Path) -> None:
+    input_path = tmp_path / "452.020-P-21.vit"
+    input_path.write_bytes(
+        b"20260818-07h13mn31: S23deg22.941mn, W140deg02.888mn\n"
+        b"status: bad\xd0\xdf\xff text\n",
+    )
+
+    station, parsed = winnow_gps.GPSKMLWinnower().parse_vit(input_path)
+
+    assert station == "P0021"
+    assert parsed == [
+        winnow_gps.PositionRecord(
+            datetime(2026, 8, 18, 7, 13, 31), "-23.382350", "-140.048133"
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     ("option", "fixture_name", "source_type"),
     [

@@ -263,7 +263,8 @@ class GPSKMLWinnower:
             r"([EW]\d+deg\d+(?:\.\d+)?mn)$"
         )
         records: list[PositionRecord] = []
-        for raw_line in input_path.read_text(encoding="utf-8").splitlines():
+        vit_text = input_path.read_bytes().decode("utf-8", errors="ignore")
+        for raw_line in vit_text.splitlines():
             match = position_line.fullmatch(raw_line.strip())
             if match is None:
                 continue
