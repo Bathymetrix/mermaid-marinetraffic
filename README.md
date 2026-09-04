@@ -19,19 +19,21 @@ The installed interface is `mermaid-marinetraffic <command> [options]`.
 ## Products
 
 `trajectory` uses the complete valid, adjacent-deduplicated GPS history unless
-`--limit N` is supplied. Its KML contains exactly one chronological LineString
+`-n N` / `--npts N` is supplied. Its KML contains exactly one chronological LineString
 (oldest to newest), with no Point or Polygon geometry.
 
 `points` retains the alternate individual-point product: one Point Placemark
-per selected GPS fix, with the established station/timestamp names.
+per selected GPS fix, with the established station/timestamp names. When
+`-n 1` / `--npts 1` selects only the latest fix, its name is
+`<STATION> latest position - <timestamp>`.
 
 `polygon` writes exactly one Polygon: a 36-vertex geodesic pseudo-circle around
 the latest valid deduplicated GPS fix. It requires `-r` / `--radius` in
-kilometers and does not accept `--limit`.
+kilometers and does not accept `-n` / `--npts`.
 
 `all` is a convenience command that writes the same three products as
 `trajectory`, `points`, and `polygon`, each to its own KML file. It requires a
-radius in kilometers; `--limit N` applies to trajectory and points only, while
+radius in kilometers; `-n N` / `--npts N` applies to trajectory and points only, while
 polygon remains centered on the latest deduplicated source fix. Its `-o` value
 is an output directory because it writes three files.
 
@@ -45,7 +47,7 @@ mermaid-marinetraffic trajectory --jsonl "$MERMAID/records" \
   -o "$MERMAID/marinetraffic"
 
 # Keep only the 50 most recent unique GPS fixes
-mermaid-marinetraffic trajectory --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl" --limit 50
+mermaid-marinetraffic trajectory --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl" -n 50
 
 # Alternate Point-only KML
 mermaid-marinetraffic points --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl"
@@ -93,7 +95,7 @@ to decimal degrees. When present, the same-serial
 
 ## History selection and size limit
 
-`--limit N` means exactly the number of most recent unique GPS fixes after
+`-n N` / `--npts N` means exactly the number of most recent unique GPS fixes after
 adjacent duplicate removal and chronological ordering. Without it, all
 available valid fixes are used. Zero and negative values are rejected.
 
@@ -101,7 +103,7 @@ MarineTraffic advertises a `MAX 400KB` upload limit. This package enforces a
 conservative 400,000-byte ceiling on the actual serialized KML bytes. It never
 silently truncates, down-samples, or writes an oversized product. If a product
 is too large, it reports the actual byte size and the exact largest
-`--limit N` that fits the same rendered schema.
+`-n N` that fits the same rendered schema.
 
 ### MarineTraffic importer behavior (empirical observations)
 

@@ -375,7 +375,8 @@ class GPSKMLWinnower:
         elif product == "points":
             for record in records:
                 placemark = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
-                ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{station} - {self.format_output_datetime(record.timestamp)}"
+                name_prefix = f"{station} latest position" if self.limit == 1 else station
+                ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{name_prefix} - {self.format_output_datetime(record.timestamp)}"
                 ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl").text = "#gps-point"
                 point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
                 ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = record.kml_coordinate
@@ -416,7 +417,7 @@ class GPSKMLWinnower:
             f"Maximum GPS points: {maximum}"
         )
         if maximum:
-            message += f"\n\nRerun with --limit {maximum} or smaller."
+            message += f"\n\nRerun with -n {maximum} or smaller."
         else:
             message += "\n\nEven one GPS fix cannot fit this KML representation."
         raise KMLSizeError(message)
@@ -519,11 +520,11 @@ class GPSKMLWinnower:
         return output_paths
 
 
-def positive_limit(value: str) -> int:
-    limit = int(value)
-    if limit <= 0:
-        raise argparse.ArgumentTypeError("--limit must be a positive number of GPS fixes")
-    return limit
+def positive_npts(value: str) -> int:
+    npts = int(value)
+    if npts <= 0:
+        raise argparse.ArgumentTypeError("--npts must be a positive number of GPS fixes")
+    return npts
 
 
 def positive_radius(value: str) -> float:
@@ -561,7 +562,7 @@ def configure_parser(parser: argparse.ArgumentParser, product: str) -> None:
     )
     parser.add_argument("-o", "--output", type=Path, help=output_help)
     if product in {"trajectory", "points", "all"}:
-        parser.add_argument("--limit", type=positive_limit, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
+        parser.add_argument("-n", "--npts", type=positive_npts, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
     if product in {"polygon", "all"}:
         parser.add_argument("-r", "--radius", required=True, type=positive_radius, metavar="KM", help="Radius in kilometers (km).")
     if product == "all":
@@ -583,7 +584,7 @@ def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
 def run(args: argparse.Namespace) -> None:
     input_path, source_type, source_tag = selected_source(args)
     output_path = args.output or GPSKMLWinnower.default_output_directory()
-    winnower = GPSKMLWinnower(limit=getattr(args, "limit", None))
+    winnower = GPSKMLWinnower(limit=getattr(args, "npts", None))
     if args.product == "all":
         outputs = winnower.process_all_paths(input_path, output_path, source_type, source_tag, args.radius)
     else:

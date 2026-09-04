@@ -37,20 +37,22 @@ def test_top_level_help_version_and_product_commands(capsys: pytest.CaptureFixtu
     for command in ("trajectory", "points"):
         with pytest.raises(SystemExit, match="0"):
             cli.main([command, "--help"])
-        assert "--limit N" in capsys.readouterr().out
+        command_help = capsys.readouterr().out
+        assert "-n, --npts N" in command_help
+        assert "--limit" not in command_help
     with pytest.raises(SystemExit, match="0"):
         cli.main(["polygon", "--help"])
     polygon_help = capsys.readouterr().out
     assert "-r, --radius KM" in polygon_help
     assert "kilometers (km)" in polygon_help
-    assert "--limit" not in polygon_help
+    assert "--npts" not in polygon_help
     with pytest.raises(SystemExit, match="0"):
         cli.main(["all", "--help"])
     all_help = capsys.readouterr().out
     assert "separate trajectory, points, and polygon KML files" in all_help
     assert "-r, --radius KM" in all_help
     assert "kilometers (km)" in all_help
-    assert "--limit N" in all_help
+    assert "-n, --npts N" in all_help
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--version"])
     assert capsys.readouterr().out.strip() == __version__
@@ -106,6 +108,14 @@ def test_points_renderer_emits_one_point_per_selected_fix() -> None:
     assert all(item.findtext("k:styleUrl", namespaces=NS) == "#gps-point" for item in placemarks)
     assert not root.findall(".//k:LineString", NS)
     assert not root.findall(".//k:Polygon", NS)
+
+
+def test_single_selected_point_is_named_latest_position() -> None:
+    selected = winnow_gps.GPSKMLWinnower(limit=1).select_records(records())
+    root = parse(winnow_gps.GPSKMLWinnower(limit=1).render_kml_bytes(
+        selected, "P0021", "automaid", "/input", "points", GENERATED_UTC
+    ))
+    assert root.findtext(".//k:Placemark/k:name", namespaces=NS) == "P0021 latest position - 03-Jan-2024 00:00"
 
 
 def haversine_meters(first: tuple[float, float], second: tuple[float, float]) -> float:
@@ -227,7 +237,7 @@ def test_vit_ignores_invalid_utf8_outside_gps_lines(tmp_path: Path) -> None:
 )
 def test_trajectory_accepts_each_file_source(tmp_path: Path, option: str, fixture_name: str, source_type: str) -> None:
     output = tmp_path / "trajectory.kml"
-    cli.main(["trajectory", option, str(FIXTURES / fixture_name), "-o", str(output), "--limit", "3"])
+    cli.main(["trajectory", option, str(FIXTURES / fixture_name), "-o", str(output), "-n", "3"])
     root = ET.parse(output).getroot()
     assert root.find(".//k:LineString", NS) is not None
     assert root.find(".//k:Point", NS) is None
@@ -240,13 +250,13 @@ def test_directory_source_writes_flat_trajectory_output(tmp_path: Path) -> None:
     input_file.parent.mkdir(parents=True)
     input_file.write_bytes((FIXTURES / "P0021_position.kml").read_bytes())
     output_directory = tmp_path / "output"
-    cli.main(["trajectory", "--kml", str(tmp_path / "processed"), "-o", str(output_directory), "--limit", "2"])
+    cli.main(["trajectory", "--kml", str(tmp_path / "processed"), "-o", str(output_directory), "-n", "2"])
     assert list(output_directory.iterdir()) == [output_directory / "gps_trajectory_P0021_src-kml.kml"]
 
 
 def test_points_command_writes_points_product(tmp_path: Path) -> None:
     output = tmp_path / "points.kml"
-    cli.main(["points", "--eso", str(FIXTURES / "P0021_all.txt"), "-o", str(output), "--limit", "2"])
+    cli.main(["points", "--eso", str(FIXTURES / "P0021_all.txt"), "-o", str(output), "--npts", "2"])
     assert len(ET.parse(output).getroot().findall(".//k:Point", NS)) == 2
 
 
@@ -269,7 +279,7 @@ def test_polygon_rejects_invalid_radius(radius: str) -> None:
 @pytest.mark.parametrize(("option", "radius"), [("-r", "1000"), ("--radius", "12.5")])
 def test_all_command_writes_three_separate_geometry_products(tmp_path: Path, option: str, radius: str) -> None:
     output_directory = tmp_path / "output"
-    cli.main(["all", "--jsonl", str(FIXTURES / "log_gps_records.452.020-P-21.jsonl"), "-o", str(output_directory), option, radius, "--limit", "2"])
+    cli.main(["all", "--jsonl", str(FIXTURES / "log_gps_records.452.020-P-21.jsonl"), "-o", str(output_directory), option, radius, "--npts", "2"])
     trajectory, points, polygon = (
         output_directory / "gps_trajectory_P0021_src-jsonl.kml",
         output_directory / "gps_points_P0021_src-jsonl.kml",
@@ -330,7 +340,7 @@ def test_size_limit_reports_exact_largest_fitting_limit() -> None:
         winnower.enforce_size(oversized, all_records, "P0021", "automaid", "/input", "trajectory", GENERATED_UTC)
     assert f"KML size:           {len(oversized)} bytes" in str(error.value)
     assert "Maximum GPS points: 2" in str(error.value)
-    assert "Rerun with --limit 2 or smaller." in str(error.value)
+    assert "Rerun with -n 2 or smaller." in str(error.value)
 
 
 def test_oversize_prevents_output_and_invalid_limit_is_rejected(tmp_path: Path) -> None:
@@ -340,4 +350,9 @@ def test_oversize_prevents_output_and_invalid_limit_is_rejected(tmp_path: Path) 
         winnower.prepare_product(FIXTURES / "P0021_position.kml", "automaid", "kml", "trajectory", output, GENERATED_UTC)
     assert not output.exists()
     with pytest.raises(SystemExit, match="2"):
-        cli.main(["trajectory", "--kml", "input.kml", "--limit", "0"])
+        cli.main(["trajectory", "--kml", "input.kml", "--npts", "0"])
+
+
+def test_limit_option_is_no_longer_accepted() -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["trajectory", "--kml", "input.kml", "--limit", "2"])
