@@ -87,6 +87,27 @@ silently truncates, down-samples, or writes an oversized product. If a product
 is too large, it reports the actual byte size and the exact largest
 `--limit N` that fits the same rendered schema.
 
+### MarineTraffic trajectory continuity (empirical observation)
+
+MarineTraffic’s upload UI currently states that uploads are one file at a time,
+at most 400 KB, with at most 50 geometries; geometry names must be at most 80
+characters and coordinates must be in longitude/latitude order. These are
+published upload limits, not a complete importer specification.
+
+In testing, a valid, approximately 22 KB KML with two geometries failed to
+import when its LineString began with an approximately 16,000 km jump from
+`6.038133,43.108050,0` to approximately
+`-149.574483,-17.566667,0`. Removing only that first coordinate allowed the
+remaining 809-coordinate LineString to import successfully. Thus, large
+LineString vertex counts were not the cause in this test; the importer appears
+to perform additional geometry or continuity validation. Its exact rule or
+threshold is unknown.
+
+`mermaid-marinetraffic` currently does not check segment distances, detect or
+reject geographic discontinuities, remove outliers, or split trajectories into
+multiple LineStrings. Such validation may be considered later but is
+intentionally out of scope for the current implementation.
+
 ## Output
 
 Without `-o`, outputs go to `$MERMAID/marinetraffic`. For a single input,
