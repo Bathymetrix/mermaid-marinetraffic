@@ -29,6 +29,12 @@ per selected GPS fix, with the established station/timestamp names.
 the latest valid deduplicated GPS fix. It requires `-r` / `--radius` in
 kilometers and does not accept `--limit`.
 
+`all` is a convenience command that writes the same three products as
+`trajectory`, `points`, and `polygon`, each to its own KML file. It requires a
+radius in kilometers; `--limit N` applies to trajectory and points only, while
+polygon remains centered on the latest deduplicated source fix. Its `-o` value
+is an output directory because it writes three files.
+
 ```bash
 # Complete trajectory from a single mermaid-records file
 mermaid-marinetraffic trajectory \
@@ -46,6 +52,11 @@ mermaid-marinetraffic points --jsonl "$MERMAID/records/452.020-P-21/log_gps_reco
 
 # Polygon-only 1,000 km radius around the latest GPS fix
 mermaid-marinetraffic polygon --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl" -r 1000
+
+# Three separate trajectory, points, and polygon KML files
+mermaid-marinetraffic all \
+  --jsonl "$MERMAID/records/452.020-P-18/log_gps_records.452.020-P-18.jsonl" \
+  --radius 1000
 ```
 
 All commands require exactly one input source. Prefer `--vit` when it is
@@ -147,3 +158,5 @@ generation time, geometry product, number of GPS fixes, and selected limit.
 Polygon KML also records `radius_km`. Its spherical destination-point ring has
 36 vertices at bearings 0 through 350 degrees in 10-degree steps, followed by
 the first coordinate again to close the LinearRing (37 serialized coordinates).
+The `all` command writes these normal product-explicit filenames separately; it
+never creates a combined KML file.

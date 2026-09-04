@@ -25,7 +25,7 @@ If instructions conflict, this file takes precedence.
 
 ## Compatibility
 
-- Product commands are `trajectory`, `points`, and `polygon`.
+- Product commands are `trajectory`, `points`, `polygon`, and `all`; `all` writes the three normal product files separately.
 - Input source options accept a file or recursively discovered directory input.
 - Trajectory defaults to complete valid, adjacent-deduplicated history. `--limit` means most-recent unique GPS fixes.
 - MarineTraffic KML must not exceed 400,000 serialized bytes. Never silently truncate oversized history; report the exact maximum fitting `--limit`.

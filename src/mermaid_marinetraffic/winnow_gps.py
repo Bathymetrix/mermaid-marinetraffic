@@ -1,4 +1,4 @@
-"""Prepare MERMAID GPS trajectories and individual-point KML products."""
+"""Prepare MERMAID GPS trajectory, Point, and Polygon KML products."""
 
 from __future__ import annotations
 
@@ -429,27 +429,34 @@ class GPSKMLWinnower:
             temporary_path = Path(temporary.name)
         temporary_path.replace(output_path)
 
+    def prepare_product_from_records(self, all_records: list[PositionRecord], station: str, source_type: str, source_tag: str, product: str, output_path: Path, source_ref: str, generated_utc: str, radius_km: float | None = None) -> tuple[Path, bytes]:
+        """Render one product from already parsed and deduplicated records."""
+        selected_records = all_records if product == "polygon" else self.select_records(all_records)
+        if not selected_records:
+            raise RuntimeError(f"No valid GPS fixes found in {source_ref}")
+        final_output = self.resolve_output_path(output_path, station, source_tag, product)
+        data = self.render_kml_bytes(selected_records, station, source_type, source_ref, product, generated_utc, radius_km)
+        if product != "polygon":
+            self.enforce_size(data, all_records, station, source_type, source_ref, product, generated_utc)
+        return final_output, data
+
     def prepare_product(self, input_path: Path, source_type: str, source_tag: str, product: str, output_path: Path, generated_utc: str, radius_km: float | None = None) -> tuple[Path, bytes]:
         station, parsed_records = self.parse_source(input_path, source_type)
         all_records = self.ordered_unique_records(parsed_records)
-        selected_records = all_records if product == "polygon" else self.select_records(parsed_records)
-        if not selected_records:
-            raise RuntimeError(f"No valid GPS fixes found in {input_path}")
-        final_output = self.resolve_output_path(output_path, station, source_tag, product)
-        data = self.render_kml_bytes(selected_records, station, source_type, str(input_path), product, generated_utc, radius_km)
-        if product != "polygon":
-            self.enforce_size(data, all_records, station, source_type, str(input_path), product, generated_utc)
-        return final_output, data
+        return self.prepare_product_from_records(
+            all_records, station, source_type, source_tag, product, output_path,
+            str(input_path), generated_utc, radius_km,
+        )
 
-    def process_paths(self, input_path: Path, output_path: Path, source_type: str, source_tag: str, product: str, radius_km: float | None = None) -> list[Path]:
+    def discover_input_paths(self, input_path: Path, output_path: Path, source_type: str) -> list[Path]:
+        """Return source inputs using the shared file-or-directory discovery rules."""
         patterns = {
             "automaid": "position.kml",
             "earthscopeoceans": "*_all.txt",
             "mermaid-records": "log_gps_records.*.jsonl",
             "vit": "*.vit",
         }
-        is_directory = input_path.is_dir()
-        if is_directory:
+        if input_path.is_dir():
             if output_path.suffix.lower() == ".kml":
                 raise RuntimeError("Directory input requires -o to be a directory, not a .kml file.")
             if source_type == "mermaid-records":
@@ -463,16 +470,46 @@ class GPSKMLWinnower:
                 inputs = sorted(input_path.rglob(patterns[source_type]))
             if not inputs:
                 raise RuntimeError(f"No matching {source_type} files under {input_path}")
-        elif input_path.is_file():
-            inputs = [input_path]
-        else:
-            raise RuntimeError(f"Not a file or directory: {input_path}")
+            return inputs
+        if input_path.is_file():
+            return [input_path]
+        raise RuntimeError(f"Not a file or directory: {input_path}")
 
+    def process_paths(self, input_path: Path, output_path: Path, source_type: str, source_tag: str, product: str, radius_km: float | None = None) -> list[Path]:
+        inputs = self.discover_input_paths(input_path, output_path, source_type)
         generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         prepared = [
             self.prepare_product(path, source_type, source_tag, product, output_path, generated_utc, radius_km)
             for path in inputs
         ]
+        output_paths = [path for path, _ in prepared]
+        if len(output_paths) != len(set(output_paths)):
+            raise RuntimeError("Multiple inputs would write the same flat output filename.")
+        for final_output, data in prepared:
+            self.write_bytes_atomically(final_output, data)
+            print(f"Output: {final_output} ({len(data)} bytes)")
+        return output_paths
+
+    def process_all_paths(self, input_path: Path, output_path: Path, source_type: str, source_tag: str, radius_km: float) -> list[Path]:
+        """Prepare separate trajectory, Point, and Polygon files from each input once."""
+        if output_path.suffix.lower() == ".kml":
+            raise RuntimeError("The all command requires -o to be a directory, not a .kml file.")
+        inputs = self.discover_input_paths(input_path, output_path, source_type)
+        generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        prepared: list[tuple[Path, bytes]] = []
+        for current_path in inputs:
+            station, parsed_records = self.parse_source(current_path, source_type)
+            all_records = self.ordered_unique_records(parsed_records)
+            for product in ("trajectory", "points", "polygon"):
+                try:
+                    prepared.append(self.prepare_product_from_records(
+                        all_records, station, source_type, source_tag, product, output_path,
+                        str(current_path), generated_utc, radius_km,
+                    ))
+                except KMLSizeError as error:
+                    raise KMLSizeError(f"{product} for {current_path}:\n{error}") from error
+                except Exception as error:
+                    raise RuntimeError(f"Failed to prepare {product} for {current_path}: {error}") from error
         output_paths = [path for path, _ in prepared]
         if len(output_paths) != len(set(output_paths)):
             raise RuntimeError("Multiple inputs would write the same flat output filename.")
@@ -504,6 +541,7 @@ def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser])
         ("trajectory", "Write a LineString-only trajectory KML."),
         ("points", "Write KML containing individual GPS Point features."),
         ("polygon", "Write a Polygon-only radius KML around the latest GPS fix."),
+        ("all", "Write separate trajectory, points, and polygon KML files."),
     ):
         parser = subparsers.add_parser(product, help=help_text)
         configure_parser(parser, product)
@@ -516,11 +554,18 @@ def configure_parser(parser: argparse.ArgumentParser, product: str) -> None:
     sources.add_argument("--kml", type=Path, metavar="PATH", help="automaid position.kml file or directory")
     sources.add_argument("--eso", type=Path, metavar="PATH", help="ESO (EarthScope-Oceans) local file or directory")
     sources.add_argument("--jsonl", type=Path, metavar="PATH", help="mermaid-records GPS JSONL file or directory")
-    parser.add_argument("-o", "--output", type=Path, help="Output file or directory (default: $MERMAID/marinetraffic)")
-    if product in {"trajectory", "points"}:
+    output_help = (
+        "Output directory for the three separate KML files (default: $MERMAID/marinetraffic)"
+        if product == "all"
+        else "Output file or directory (default: $MERMAID/marinetraffic)"
+    )
+    parser.add_argument("-o", "--output", type=Path, help=output_help)
+    if product in {"trajectory", "points", "all"}:
         parser.add_argument("--limit", type=positive_limit, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
-    else:
+    if product in {"polygon", "all"}:
         parser.add_argument("-r", "--radius", required=True, type=positive_radius, metavar="KM", help="Radius in kilometers (km).")
+    if product == "all":
+        parser.description = "Write separate trajectory, points, and polygon KML files."
 
 
 def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
@@ -538,9 +583,13 @@ def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
 def run(args: argparse.Namespace) -> None:
     input_path, source_type, source_tag = selected_source(args)
     output_path = args.output or GPSKMLWinnower.default_output_directory()
-    outputs = GPSKMLWinnower(limit=getattr(args, "limit", None)).process_paths(
-        input_path, output_path, source_type, source_tag, args.product, getattr(args, "radius", None)
-    )
+    winnower = GPSKMLWinnower(limit=getattr(args, "limit", None))
+    if args.product == "all":
+        outputs = winnower.process_all_paths(input_path, output_path, source_type, source_tag, args.radius)
+    else:
+        outputs = winnower.process_paths(
+            input_path, output_path, source_type, source_tag, args.product, getattr(args, "radius", None)
+        )
     if len(outputs) > 1:
         print(f"Processed {len(outputs)} files.")
 

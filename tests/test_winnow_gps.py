@@ -32,7 +32,7 @@ def test_top_level_help_version_and_product_commands(capsys: pytest.CaptureFixtu
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--help"])
     help_text = capsys.readouterr().out
-    assert all(command in help_text for command in ("trajectory", "points", "polygon"))
+    assert all(command in help_text for command in ("trajectory", "points", "polygon", "all"))
     assert "winnow_gps" not in help_text
     for command in ("trajectory", "points"):
         with pytest.raises(SystemExit, match="0"):
@@ -44,6 +44,13 @@ def test_top_level_help_version_and_product_commands(capsys: pytest.CaptureFixtu
     assert "-r, --radius KM" in polygon_help
     assert "kilometers (km)" in polygon_help
     assert "--limit" not in polygon_help
+    with pytest.raises(SystemExit, match="0"):
+        cli.main(["all", "--help"])
+    all_help = capsys.readouterr().out
+    assert "separate trajectory, points, and polygon KML files" in all_help
+    assert "-r, --radius KM" in all_help
+    assert "kilometers (km)" in all_help
+    assert "--limit N" in all_help
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--version"])
     assert capsys.readouterr().out.strip() == __version__
@@ -257,6 +264,58 @@ def test_polygon_command_writes_polygon_product(tmp_path: Path, option: str, rad
 def test_polygon_rejects_invalid_radius(radius: str) -> None:
     with pytest.raises(SystemExit, match="2"):
         cli.main(["polygon", "--jsonl", str(FIXTURES / "log_gps_records.452.020-P-21.jsonl"), "-r", radius])
+
+
+@pytest.mark.parametrize(("option", "radius"), [("-r", "1000"), ("--radius", "12.5")])
+def test_all_command_writes_three_separate_geometry_products(tmp_path: Path, option: str, radius: str) -> None:
+    output_directory = tmp_path / "output"
+    cli.main(["all", "--jsonl", str(FIXTURES / "log_gps_records.452.020-P-21.jsonl"), "-o", str(output_directory), option, radius, "--limit", "2"])
+    trajectory, points, polygon = (
+        output_directory / "gps_trajectory_P0021_src-jsonl.kml",
+        output_directory / "gps_points_P0021_src-jsonl.kml",
+        output_directory / "gps_polygon_P0021_src-jsonl.kml",
+    )
+    assert sorted(output_directory.iterdir()) == [points, polygon, trajectory]
+    trajectory_root, points_root, polygon_root = (ET.parse(path).getroot() for path in (trajectory, points, polygon))
+    assert len(trajectory_root.findall(".//k:LineString", NS)) == 1
+    assert not trajectory_root.findall(".//k:Point", NS)
+    assert not trajectory_root.findall(".//k:Polygon", NS)
+    assert len(points_root.findall(".//k:Point", NS)) == 2
+    assert not points_root.findall(".//k:LineString", NS)
+    assert not points_root.findall(".//k:Polygon", NS)
+    assert len(polygon_root.findall(".//k:Polygon", NS)) == 1
+    assert not polygon_root.findall(".//k:Point", NS)
+    assert not polygon_root.findall(".//k:LineString", NS)
+    polygon_metadata = {item.get("name"): item.findtext("k:value", namespaces=NS) for item in polygon_root.findall(".//k:Data", NS)}
+    assert polygon_metadata["radius_km"] == radius
+    assert polygon_metadata["gps_points"] != "2"
+
+
+def test_all_requires_radius_and_directory_output(tmp_path: Path) -> None:
+    source = str(FIXTURES / "log_gps_records.452.020-P-21.jsonl")
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["all", "--jsonl", source])
+    with pytest.raises(RuntimeError, match="requires -o to be a directory"):
+        cli.main(["all", "--jsonl", source, "-r", "1000", "-o", str(tmp_path / "combined.kml")])
+
+
+def test_all_directory_input_writes_three_products_per_station(tmp_path: Path) -> None:
+    input_directory = tmp_path / "inputs"
+    input_directory.mkdir()
+    for station in ("P0021", "P0022"):
+        (input_directory / f"{station}_all.txt").write_text(
+            f"{station} 01-Jan-2024 00:00:00 1 10\n{station} 02-Jan-2024 00:00:00 2 20\n",
+            encoding="utf-8",
+        )
+    output_directory = tmp_path / "output"
+
+    cli.main(["all", "--eso", str(input_directory), "-o", str(output_directory), "-r", "1000"])
+
+    assert sorted(path.name for path in output_directory.iterdir()) == [
+        "gps_points_P0021_src-eso.kml", "gps_points_P0022_src-eso.kml",
+        "gps_polygon_P0021_src-eso.kml", "gps_polygon_P0022_src-eso.kml",
+        "gps_trajectory_P0021_src-eso.kml", "gps_trajectory_P0022_src-eso.kml",
+    ]
 
 
 def test_size_limit_reports_exact_largest_fitting_limit() -> None:

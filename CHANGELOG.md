@@ -12,10 +12,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Separated generated KML by geometry type in response to empirical MarineTraffic mixed-geometry import failures.
 
 ### Added
+- Added the `all` convenience command, which parses each input once and writes separate trajectory, points, and polygon KML products with required kilometer radius.
 - Added the Polygon-only `polygon` command, which creates a 36-vertex geodesic radius ring around the latest deduplicated GPS fix using required `-r`/`--radius` kilometers.
 - Recorded polygon radius provenance in KML metadata.
 
 ### Changed
+- Bumped the package version to 0.4.0 for the `all` public CLI command.
 - Documented an empirical MarineTraffic trajectory-continuity importer observation.
 - Bumped the package version to 0.2.0 for the trajectory-product and input-source interface changes.
 - Added `GPSINFO` fixes from `mer_environment_records.*.jsonl` to the JSONL GPS input.
