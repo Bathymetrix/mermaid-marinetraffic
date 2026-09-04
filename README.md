@@ -18,14 +18,16 @@ The installed interface is `mermaid-marinetraffic <command> [options]`.
 
 ## Products
 
-`trajectory` is the default product model. It uses the complete valid,
-adjacent-deduplicated GPS history unless `--limit N` is supplied. A trajectory
-KML contains one chronological LineString (oldest to newest) and a separate
-Point marking the latest fix. A one-fix history contains the useful latest
-Point without a degenerate LineString.
+`trajectory` uses the complete valid, adjacent-deduplicated GPS history unless
+`--limit N` is supplied. Its KML contains exactly one chronological LineString
+(oldest to newest), with no Point or Polygon geometry.
 
 `points` retains the alternate individual-point product: one Point Placemark
 per selected GPS fix, with the established station/timestamp names.
+
+`polygon` writes exactly one Polygon: a 36-vertex geodesic pseudo-circle around
+the latest valid deduplicated GPS fix. It requires `-r` / `--radius` in
+kilometers and does not accept `--limit`.
 
 ```bash
 # Complete trajectory from a single mermaid-records file
@@ -41,6 +43,9 @@ mermaid-marinetraffic trajectory --jsonl "$MERMAID/records/452.020-P-21/log_gps_
 
 # Alternate Point-only KML
 mermaid-marinetraffic points --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl"
+
+# Polygon-only 1,000 km radius around the latest GPS fix
+mermaid-marinetraffic polygon --jsonl "$MERMAID/records/452.020-P-21/log_gps_records.452.020-P-21.jsonl" -r 1000
 ```
 
 All commands require exactly one input source. Prefer `--vit` when it is
@@ -87,7 +92,7 @@ silently truncates, down-samples, or writes an oversized product. If a product
 is too large, it reports the actual byte size and the exact largest
 `--limit N` that fits the same rendered schema.
 
-### MarineTraffic trajectory continuity (empirical observation)
+### MarineTraffic importer behavior (empirical observations)
 
 MarineTraffic’s upload UI currently states that uploads are one file at a time,
 at most 400 KB, with at most 50 geometries; geometry names must be at most 80
@@ -108,6 +113,14 @@ reject geographic discontinuities, remove outliers, or split trajectories into
 multiple LineStrings. Such validation may be considered later but is
 intentionally out of scope for the current implementation.
 
+Standalone trajectory, Point, and Polygon KML products have imported
+successfully in testing, while KML files combining otherwise known-good
+geometry types have behaved inconsistently or failed. Therefore this package
+intentionally writes separate product files containing a single geometry type:
+trajectory is LineString-only, points is Point-only, and polygon is
+Polygon-only. This is an empirical importer behavior, not a documented
+MarineTraffic specification.
+
 ## Output
 
 Without `-o`, outputs go to `$MERMAID/marinetraffic`. For a single input,
@@ -123,9 +136,14 @@ gps_points_<STATION>_src-kml.kml
 gps_points_<STATION>_src-eso.kml
 gps_points_<STATION>_src-jsonl.kml
 gps_points_<STATION>_src-vit.kml
+gps_polygon_<STATION>_src-kml.kml
+gps_polygon_<STATION>_src-eso.kml
+gps_polygon_<STATION>_src-jsonl.kml
+gps_polygon_<STATION>_src-vit.kml
 ```
 
 Generated KML includes concise provenance metadata: source type/reference,
 generation time, geometry product, number of GPS fixes, and selected limit.
-Trajectory KML uses distinct document-level styles for its historical line and
-emphasized latest position.
+Polygon KML also records `radius_km`. Its spherical destination-point ring has
+36 vertices at bearings 0 through 350 degrees in 10-degree steps, followed by
+the first coordinate again to close the LinearRing (37 serialized coordinates).

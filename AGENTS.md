@@ -25,11 +25,12 @@ If instructions conflict, this file takes precedence.
 
 ## Compatibility
 
-- `trajectory` is the primary product command; `points` retains individual Point output.
+- Product commands are `trajectory`, `points`, and `polygon`.
 - Input source options accept a file or recursively discovered directory input.
 - Trajectory defaults to complete valid, adjacent-deduplicated history. `--limit` means most-recent unique GPS fixes.
 - MarineTraffic KML must not exceed 400,000 serialized bytes. Never silently truncate oversized history; report the exact maximum fitting `--limit`.
-- Trajectory KML contains a chronological LineString and a separate latest Point when at least two fixes exist. Source parsing and selection rules must be shared by both renderers.
+- Generated KML files must contain exactly one geometry type because empirical MarineTraffic mixed-geometry imports have behaved inconsistently: trajectory is LineString-only, points is Point-only, and polygon is Polygon-only.
+- Polygon uses a required kilometer radius and a 36-vertex geodesic ring plus its repeated closing coordinate. Source parsing and normalization are shared across products.
 - Update `README.md` and focused tests when user-visible CLI or output behavior changes.
 
 ## Repository maintenance

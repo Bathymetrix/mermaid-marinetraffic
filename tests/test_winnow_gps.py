@@ -1,7 +1,8 @@
-"""Focused tests for trajectory and individual-point KML products."""
+"""Focused tests for trajectory, Point, and Polygon KML products."""
 
 from datetime import datetime
 import json
+import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -31,12 +32,18 @@ def test_top_level_help_version_and_product_commands(capsys: pytest.CaptureFixtu
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--help"])
     help_text = capsys.readouterr().out
-    assert "trajectory" in help_text and "points" in help_text
+    assert all(command in help_text for command in ("trajectory", "points", "polygon"))
     assert "winnow_gps" not in help_text
     for command in ("trajectory", "points"):
         with pytest.raises(SystemExit, match="0"):
             cli.main([command, "--help"])
         assert "--limit N" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="0"):
+        cli.main(["polygon", "--help"])
+    polygon_help = capsys.readouterr().out
+    assert "-r, --radius KM" in polygon_help
+    assert "kilometers (km)" in polygon_help
+    assert "--limit" not in polygon_help
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--version"])
     assert capsys.readouterr().out.strip() == __version__
@@ -47,7 +54,7 @@ def test_selection_defaults_to_complete_ordered_history_and_limit_is_recent() ->
     assert [record.latitude for record in winnow_gps.GPSKMLWinnower(limit=2).select_records(records())] == ["2", "3"]
 
 
-def test_trajectory_has_ordered_linestring_latest_point_styles_and_provenance() -> None:
+def test_trajectory_has_only_an_ordered_linestring_and_provenance() -> None:
     winnower = winnow_gps.GPSKMLWinnower(limit=2)
     data = winnower.render_kml_bytes(
         winnower.select_records(records()), "P0021", "automaid", "/input/position.kml",
@@ -56,12 +63,12 @@ def test_trajectory_has_ordered_linestring_latest_point_styles_and_provenance() 
     root = parse(data)
     line_coordinates = root.findtext(".//k:LineString/k:coordinates", namespaces=NS)
     assert line_coordinates.splitlines() == ["20,2,0", "30,3,0"]
-    latest_coordinates = root.findtext(".//k:Placemark[k:name='P0021 - latest - 03-Jan-2024 00:00']/k:Point/k:coordinates", namespaces=NS)
-    assert latest_coordinates == "30,3,0"
     assert root.findtext(".//k:Placemark[k:name='P0021 trajectory']/k:styleUrl", namespaces=NS) == "#trajectory"
-    assert root.findtext(".//k:Placemark[k:Point]/k:styleUrl", namespaces=NS) == "#latest-position"
     assert root.findtext(".//k:Style[@id='trajectory']/k:LineStyle/k:width", namespaces=NS) == "3"
-    assert root.findtext(".//k:Style[@id='latest-position']/k:IconStyle/k:scale", namespaces=NS) == "1.8"
+    assert len(root.findall(".//k:Placemark", NS)) == 1
+    assert len(root.findall(".//k:LineString", NS)) == 1
+    assert not root.findall(".//k:Point", NS)
+    assert not root.findall(".//k:Polygon", NS)
     metadata = {item.get("name"): item.findtext("k:value", namespaces=NS) for item in root.findall(".//k:Data", NS)}
     assert metadata == {
         "source_type": "automaid", "source_ref": "/input/position.kml",
@@ -70,13 +77,13 @@ def test_trajectory_has_ordered_linestring_latest_point_styles_and_provenance() 
     }
 
 
-def test_single_fix_trajectory_preserves_latest_position_without_degenerate_line() -> None:
+def test_single_fix_trajectory_is_still_linestring_only() -> None:
     data = winnow_gps.GPSKMLWinnower().render_kml_bytes(
         records()[:1], "P0021", "automaid", "/input", "trajectory", GENERATED_UTC
     )
     root = parse(data)
-    assert root.find(".//k:LineString", NS) is None
-    assert root.findtext(".//k:Point/k:coordinates", namespaces=NS) == "30,3,0"
+    assert root.findtext(".//k:LineString/k:coordinates", namespaces=NS) == "30,3,0"
+    assert not root.findall(".//k:Point", NS)
 
 
 def test_points_renderer_emits_one_point_per_selected_fix() -> None:
@@ -90,6 +97,52 @@ def test_points_renderer_emits_one_point_per_selected_fix() -> None:
         "P0021 - 02-Jan-2024 00:00", "P0021 - 03-Jan-2024 00:00"
     ]
     assert all(item.findtext("k:styleUrl", namespaces=NS) == "#gps-point" for item in placemarks)
+    assert not root.findall(".//k:LineString", NS)
+    assert not root.findall(".//k:Polygon", NS)
+
+
+def haversine_meters(first: tuple[float, float], second: tuple[float, float]) -> float:
+    latitude_1, longitude_1 = map(math.radians, first)
+    latitude_2, longitude_2 = map(math.radians, second)
+    angle = 2 * math.asin(math.sqrt(
+        math.sin((latitude_2 - latitude_1) / 2) ** 2
+        + math.cos(latitude_1) * math.cos(latitude_2) * math.sin((longitude_2 - longitude_1) / 2) ** 2
+    ))
+    return winnow_gps.EARTH_RADIUS_METERS * angle
+
+
+def initial_bearing_degrees(center: tuple[float, float], vertex: tuple[float, float]) -> float:
+    latitude_1, longitude_1 = map(math.radians, center)
+    latitude_2, longitude_2 = map(math.radians, vertex)
+    bearing = math.degrees(math.atan2(
+        math.sin(longitude_2 - longitude_1) * math.cos(latitude_2),
+        math.cos(latitude_1) * math.sin(latitude_2)
+        - math.sin(latitude_1) * math.cos(latitude_2) * math.cos(longitude_2 - longitude_1),
+    ))
+    return bearing % 360
+
+
+def test_polygon_is_closed_geodesic_circle_around_latest_deduplicated_fix() -> None:
+    winnower = winnow_gps.GPSKMLWinnower()
+    selected = winnower.select_records(records())
+    root = parse(winnower.render_kml_bytes(
+        selected, "P0021", "automaid", "/input", "polygon", GENERATED_UTC, radius_km=12.5
+    ))
+    assert len(root.findall(".//k:Polygon", NS)) == 1
+    assert not root.findall(".//k:Point", NS)
+    assert not root.findall(".//k:LineString", NS)
+    coordinates = root.findtext(".//k:LinearRing/k:coordinates", namespaces=NS).splitlines()
+    assert len(coordinates) == 37
+    assert len(set(coordinates[:-1])) == 36
+    assert coordinates[0] == coordinates[-1]
+    center = (3.0, 30.0)
+    vertices = [tuple(map(float, coordinate.split(",")[:2][::-1])) for coordinate in coordinates[:-1]]
+    assert all(abs(haversine_meters(center, vertex) - 12_500) < 0.2 for vertex in vertices)
+    bearings = [initial_bearing_degrees(center, vertex) for vertex in vertices]
+    assert all(abs(actual - expected) < 0.001 for expected, actual in zip(range(0, 360, 10), bearings))
+    metadata = {item.get("name"): item.findtext("k:value", namespaces=NS) for item in root.findall(".//k:Data", NS)}
+    assert metadata["radius_km"] == "12.5"
+    assert root.findtext(".//k:Placemark/k:name", namespaces=NS) == "P0021 12.5 km radius"
 
 
 def test_json_coordinate_and_identity_parsing() -> None:
@@ -170,7 +223,7 @@ def test_trajectory_accepts_each_file_source(tmp_path: Path, option: str, fixtur
     cli.main(["trajectory", option, str(FIXTURES / fixture_name), "-o", str(output), "--limit", "3"])
     root = ET.parse(output).getroot()
     assert root.find(".//k:LineString", NS) is not None
-    assert root.find(".//k:Point", NS) is not None
+    assert root.find(".//k:Point", NS) is None
     metadata = {item.get("name"): item.findtext("k:value", namespaces=NS) for item in root.findall(".//k:Data", NS)}
     assert metadata["source_type"] == source_type
 
@@ -188,6 +241,22 @@ def test_points_command_writes_points_product(tmp_path: Path) -> None:
     output = tmp_path / "points.kml"
     cli.main(["points", "--eso", str(FIXTURES / "P0021_all.txt"), "-o", str(output), "--limit", "2"])
     assert len(ET.parse(output).getroot().findall(".//k:Point", NS)) == 2
+
+
+@pytest.mark.parametrize(("option", "radius"), [("-r", "1000"), ("--radius", "12.5")])
+def test_polygon_command_writes_polygon_product(tmp_path: Path, option: str, radius: str) -> None:
+    output = tmp_path / "polygon.kml"
+    cli.main(["polygon", "--jsonl", str(FIXTURES / "log_gps_records.452.020-P-21.jsonl"), "-o", str(output), option, radius])
+    root = ET.parse(output).getroot()
+    assert len(root.findall(".//k:Polygon", NS)) == 1
+    assert not root.findall(".//k:Point", NS)
+    assert not root.findall(".//k:LineString", NS)
+
+
+@pytest.mark.parametrize("radius", ["0", "-1", "bad"])
+def test_polygon_rejects_invalid_radius(radius: str) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["polygon", "--jsonl", str(FIXTURES / "log_gps_records.452.020-P-21.jsonl"), "-r", radius])
 
 
 def test_size_limit_reports_exact_largest_fitting_limit() -> None:

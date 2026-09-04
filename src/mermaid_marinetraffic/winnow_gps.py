@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import tempfile
@@ -19,6 +20,8 @@ NS = {"k": KML_NS}
 DEFAULT_OUTPUT_ENVIRONMENT_VARIABLE = "MERMAID"
 DEFAULT_OUTPUT_SUBDIRECTORY = "marinetraffic"
 MARINETRAFFIC_MAX_KML_BYTES = 400_000
+EARTH_RADIUS_METERS = 6_371_008.8
+POLYGON_VERTEX_COUNT = 36
 
 
 @dataclass(frozen=True)
@@ -289,24 +292,63 @@ class GPSKMLWinnower:
         }[source_type](input_path)
 
     @staticmethod
-    def add_styles(document: ET.Element) -> None:
-        trajectory_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "trajectory"})
-        line_style = ET.SubElement(trajectory_style, f"{{{KML_NS}}}LineStyle")
+    def add_styles(document: ET.Element, product: str) -> None:
+        """Add only styles appropriate to this single-geometry product."""
+        if product == "trajectory":
+            trajectory_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "trajectory"})
+            line_style = ET.SubElement(trajectory_style, f"{{{KML_NS}}}LineStyle")
+            ET.SubElement(line_style, f"{{{KML_NS}}}color").text = "ffcc6600"
+            ET.SubElement(line_style, f"{{{KML_NS}}}width").text = "3"
+            return
+        if product == "points":
+            points_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "gps-point"})
+            ET.SubElement(ET.SubElement(points_style, f"{{{KML_NS}}}IconStyle"), f"{{{KML_NS}}}scale").text = "1"
+            return
+        polygon_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "radius-polygon"})
+        line_style = ET.SubElement(polygon_style, f"{{{KML_NS}}}LineStyle")
         ET.SubElement(line_style, f"{{{KML_NS}}}color").text = "ffcc6600"
-        ET.SubElement(line_style, f"{{{KML_NS}}}width").text = "3"
-        latest_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "latest-position"})
-        icon_style = ET.SubElement(latest_style, f"{{{KML_NS}}}IconStyle")
-        ET.SubElement(icon_style, f"{{{KML_NS}}}color").text = "ff00ffff"
-        ET.SubElement(icon_style, f"{{{KML_NS}}}scale").text = "1.8"
-        points_style = ET.SubElement(document, f"{{{KML_NS}}}Style", {"id": "gps-point"})
-        ET.SubElement(ET.SubElement(points_style, f"{{{KML_NS}}}IconStyle"), f"{{{KML_NS}}}scale").text = "1"
+        ET.SubElement(line_style, f"{{{KML_NS}}}width").text = "2"
+        poly_style = ET.SubElement(polygon_style, f"{{{KML_NS}}}PolyStyle")
+        ET.SubElement(poly_style, f"{{{KML_NS}}}color").text = "5533aaff"
 
-    def render_kml_bytes(self, records: list[PositionRecord], station: str, source_type: str, source_ref: str, product: str, generated_utc: str) -> bytes:
+    @staticmethod
+    def destination_coordinate(latitude: float, longitude: float, bearing_degrees: float, distance_meters: float) -> str:
+        """Return a spherical destination coordinate in KML longitude,latitude order."""
+        angular_distance = distance_meters / EARTH_RADIUS_METERS
+        latitude_radians = math.radians(latitude)
+        longitude_radians = math.radians(longitude)
+        bearing_radians = math.radians(bearing_degrees)
+        destination_latitude = math.asin(
+            math.sin(latitude_radians) * math.cos(angular_distance)
+            + math.cos(latitude_radians) * math.sin(angular_distance) * math.cos(bearing_radians)
+        )
+        destination_longitude = longitude_radians + math.atan2(
+            math.sin(bearing_radians) * math.sin(angular_distance) * math.cos(latitude_radians),
+            math.cos(angular_distance) - math.sin(latitude_radians) * math.sin(destination_latitude),
+        )
+        normalized_longitude = (math.degrees(destination_longitude) + 540) % 360 - 180
+        return f"{normalized_longitude:.6f},{math.degrees(destination_latitude):.6f},0"
+
+    @classmethod
+    def polygon_coordinates(cls, center: PositionRecord, radius_km: float) -> list[str]:
+        coordinates = [
+            cls.destination_coordinate(float(center.latitude), float(center.longitude), bearing, radius_km * 1_000)
+            for bearing in range(0, 360, 360 // POLYGON_VERTEX_COUNT)
+        ]
+        return coordinates + [coordinates[0]]
+
+    @staticmethod
+    def format_radius_km(radius_km: float) -> str:
+        return f"{radius_km:g}"
+
+    # Empirical MarineTraffic imports have been inconsistent for mixed geometry
+    # files, so each generated product deliberately contains one geometry type.
+    def render_kml_bytes(self, records: list[PositionRecord], station: str, source_type: str, source_ref: str, product: str, generated_utc: str, radius_km: float | None = None) -> bytes:
         root = ET.Element(f"{{{KML_NS}}}kml")
         document = ET.SubElement(root, f"{{{KML_NS}}}Document")
         ET.SubElement(document, f"{{{KML_NS}}}name").text = f"{station} {product}"
         ET.SubElement(document, f"{{{KML_NS}}}description").text = f"Generated from {source_type} input"
-        self.add_styles(document)
+        self.add_styles(document, product)
         extended_data = ET.SubElement(document, f"{{{KML_NS}}}ExtendedData")
         metadata = {
             "source_type": source_type,
@@ -316,31 +358,35 @@ class GPSKMLWinnower:
             "gps_points": str(len(records)),
             "limit": "all" if self.limit is None else str(self.limit),
         }
+        if product == "polygon":
+            if radius_km is None:
+                raise ValueError("polygon rendering requires radius_km")
+            metadata["radius_km"] = self.format_radius_km(radius_km)
         for key, value in metadata.items():
             data = ET.SubElement(extended_data, f"{{{KML_NS}}}Data", {"name": key})
             ET.SubElement(data, f"{{{KML_NS}}}value").text = value
 
         if product == "trajectory":
-            if len(records) >= 2:
-                trajectory = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
-                ET.SubElement(trajectory, f"{{{KML_NS}}}name").text = f"{station} trajectory"
-                ET.SubElement(trajectory, f"{{{KML_NS}}}styleUrl").text = "#trajectory"
-                line = ET.SubElement(trajectory, f"{{{KML_NS}}}LineString")
-                ET.SubElement(line, f"{{{KML_NS}}}coordinates").text = "\n".join(record.kml_coordinate for record in records)
-            if records:
-                latest = records[-1]
-                placemark = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
-                ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{station} - latest - {self.format_output_datetime(latest.timestamp)}"
-                ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl").text = "#latest-position"
-                point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
-                ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = latest.kml_coordinate
-        else:
+            trajectory = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
+            ET.SubElement(trajectory, f"{{{KML_NS}}}name").text = f"{station} trajectory"
+            ET.SubElement(trajectory, f"{{{KML_NS}}}styleUrl").text = "#trajectory"
+            line = ET.SubElement(trajectory, f"{{{KML_NS}}}LineString")
+            ET.SubElement(line, f"{{{KML_NS}}}coordinates").text = "\n".join(record.kml_coordinate for record in records)
+        elif product == "points":
             for record in records:
                 placemark = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
                 ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{station} - {self.format_output_datetime(record.timestamp)}"
                 ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl").text = "#gps-point"
                 point = ET.SubElement(placemark, f"{{{KML_NS}}}Point")
                 ET.SubElement(point, f"{{{KML_NS}}}coordinates").text = record.kml_coordinate
+        else:
+            placemark = ET.SubElement(document, f"{{{KML_NS}}}Placemark")
+            ET.SubElement(placemark, f"{{{KML_NS}}}name").text = f"{station} {self.format_radius_km(radius_km)} km radius"
+            ET.SubElement(placemark, f"{{{KML_NS}}}styleUrl").text = "#radius-polygon"
+            polygon = ET.SubElement(placemark, f"{{{KML_NS}}}Polygon")
+            boundary = ET.SubElement(polygon, f"{{{KML_NS}}}outerBoundaryIs")
+            ring = ET.SubElement(boundary, f"{{{KML_NS}}}LinearRing")
+            ET.SubElement(ring, f"{{{KML_NS}}}coordinates").text = "\n".join(self.polygon_coordinates(records[-1], radius_km))
 
         ET.indent(root, space="    ")
         return ET.tostring(root, encoding="UTF-8", xml_declaration=True)
@@ -383,18 +429,19 @@ class GPSKMLWinnower:
             temporary_path = Path(temporary.name)
         temporary_path.replace(output_path)
 
-    def prepare_product(self, input_path: Path, source_type: str, source_tag: str, product: str, output_path: Path, generated_utc: str) -> tuple[Path, bytes]:
+    def prepare_product(self, input_path: Path, source_type: str, source_tag: str, product: str, output_path: Path, generated_utc: str, radius_km: float | None = None) -> tuple[Path, bytes]:
         station, parsed_records = self.parse_source(input_path, source_type)
         all_records = self.ordered_unique_records(parsed_records)
-        selected_records = self.select_records(parsed_records)
+        selected_records = all_records if product == "polygon" else self.select_records(parsed_records)
         if not selected_records:
             raise RuntimeError(f"No valid GPS fixes found in {input_path}")
         final_output = self.resolve_output_path(output_path, station, source_tag, product)
-        data = self.render_kml_bytes(selected_records, station, source_type, str(input_path), product, generated_utc)
-        self.enforce_size(data, all_records, station, source_type, str(input_path), product, generated_utc)
+        data = self.render_kml_bytes(selected_records, station, source_type, str(input_path), product, generated_utc, radius_km)
+        if product != "polygon":
+            self.enforce_size(data, all_records, station, source_type, str(input_path), product, generated_utc)
         return final_output, data
 
-    def process_paths(self, input_path: Path, output_path: Path, source_type: str, source_tag: str, product: str) -> list[Path]:
+    def process_paths(self, input_path: Path, output_path: Path, source_type: str, source_tag: str, product: str, radius_km: float | None = None) -> list[Path]:
         patterns = {
             "automaid": "position.kml",
             "earthscopeoceans": "*_all.txt",
@@ -423,7 +470,7 @@ class GPSKMLWinnower:
 
         generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         prepared = [
-            self.prepare_product(path, source_type, source_tag, product, output_path, generated_utc)
+            self.prepare_product(path, source_type, source_tag, product, output_path, generated_utc, radius_km)
             for path in inputs
         ]
         output_paths = [path for path, _ in prepared]
@@ -442,24 +489,38 @@ def positive_limit(value: str) -> int:
     return limit
 
 
+def positive_radius(value: str) -> float:
+    try:
+        radius_km = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("--radius must be a positive number of kilometers") from error
+    if not math.isfinite(radius_km) or radius_km <= 0:
+        raise argparse.ArgumentTypeError("--radius must be a positive number of kilometers")
+    return radius_km
+
+
 def add_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     for product, help_text in (
-        ("trajectory", "Write trajectory KML with latest position."),
+        ("trajectory", "Write a LineString-only trajectory KML."),
         ("points", "Write KML containing individual GPS Point features."),
+        ("polygon", "Write a Polygon-only radius KML around the latest GPS fix."),
     ):
         parser = subparsers.add_parser(product, help=help_text)
-        configure_parser(parser)
+        configure_parser(parser, product)
         parser.set_defaults(handler=run, product=product)
 
 
-def configure_parser(parser: argparse.ArgumentParser) -> None:
+def configure_parser(parser: argparse.ArgumentParser, product: str) -> None:
     sources = parser.add_mutually_exclusive_group(required=True)
     sources.add_argument("--vit", type=Path, metavar="PATH", help="preferred MERMAID .vit file or directory")
     sources.add_argument("--kml", type=Path, metavar="PATH", help="automaid position.kml file or directory")
     sources.add_argument("--eso", type=Path, metavar="PATH", help="ESO (EarthScope-Oceans) local file or directory")
     sources.add_argument("--jsonl", type=Path, metavar="PATH", help="mermaid-records GPS JSONL file or directory")
     parser.add_argument("-o", "--output", type=Path, help="Output file or directory (default: $MERMAID/marinetraffic)")
-    parser.add_argument("--limit", type=positive_limit, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
+    if product in {"trajectory", "points"}:
+        parser.add_argument("--limit", type=positive_limit, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
+    else:
+        parser.add_argument("-r", "--radius", required=True, type=positive_radius, metavar="KM", help="Radius in kilometers (km).")
 
 
 def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
@@ -477,8 +538,8 @@ def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
 def run(args: argparse.Namespace) -> None:
     input_path, source_type, source_tag = selected_source(args)
     output_path = args.output or GPSKMLWinnower.default_output_directory()
-    outputs = GPSKMLWinnower(limit=args.limit).process_paths(
-        input_path, output_path, source_type, source_tag, args.product
+    outputs = GPSKMLWinnower(limit=getattr(args, "limit", None)).process_paths(
+        input_path, output_path, source_type, source_tag, args.product, getattr(args, "radius", None)
     )
     if len(outputs) > 1:
         print(f"Processed {len(outputs)} files.")
