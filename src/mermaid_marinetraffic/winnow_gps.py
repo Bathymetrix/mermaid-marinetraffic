@@ -46,8 +46,9 @@ class KMLSizeError(RuntimeError):
 
 
 class GPSKMLWinnower:
-    def __init__(self, limit: int | None = None, max_kml_bytes: int = MARINETRAFFIC_MAX_KML_BYTES) -> None:
+    def __init__(self, limit: int | None = None, max_kml_bytes: int = MARINETRAFFIC_MAX_KML_BYTES, after: datetime | None = None) -> None:
         self.limit = limit
+        self.after = after
         self.max_kml_bytes = max_kml_bytes
         ET.register_namespace("", KML_NS)
         ET.register_namespace("gx", GX_NS)
@@ -358,6 +359,8 @@ class GPSKMLWinnower:
             "gps_points": str(len(records)),
             "limit": "all" if self.limit is None else str(self.limit),
         }
+        if self.after is not None and product in {"trajectory", "points"}:
+            metadata["after"] = self.after.isoformat() + "Z"
         if product == "polygon":
             if radius_km is None:
                 raise ValueError("polygon rendering requires radius_km")
@@ -432,6 +435,10 @@ class GPSKMLWinnower:
 
     def prepare_product_from_records(self, all_records: list[PositionRecord], station: str, source_type: str, source_tag: str, product: str, output_path: Path, source_ref: str, generated_utc: str, radius_km: float | None = None) -> tuple[Path, bytes]:
         """Render one product from already parsed and deduplicated records."""
+        if self.after is not None and product in {"trajectory", "points"}:
+            all_records = [record for record in all_records if record.timestamp > self.after]
+            if not all_records:
+                raise RuntimeError(f"No GPS fixes strictly after {self.after.isoformat()}Z in {source_ref}")
         selected_records = all_records if product == "polygon" else self.select_records(all_records)
         if not selected_records:
             raise RuntimeError(f"No valid GPS fixes found in {source_ref}")
@@ -527,6 +534,17 @@ def positive_npts(value: str) -> int:
     return npts
 
 
+def parse_after(value: str) -> datetime:
+    """Parse an ISO cutoff, interpreting timezone-free values as UTC."""
+    try:
+        cutoff = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("--after must be an ISO date or datetime (e.g. 2018-09-12T02:04:14Z)") from error
+    if cutoff.tzinfo is not None:
+        cutoff = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
+    return cutoff
+
+
 def positive_radius(value: str) -> float:
     try:
         radius_km = float(value)
@@ -563,6 +581,8 @@ def configure_parser(parser: argparse.ArgumentParser, product: str) -> None:
     parser.add_argument("-o", "--output", type=Path, help=output_help)
     if product in {"trajectory", "points", "all"}:
         parser.add_argument("-n", "--npts", type=positive_npts, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
+    if product in {"trajectory", "points"}:
+        parser.add_argument("--after", type=parse_after, metavar="DATETIME", help="Keep fixes strictly after this ISO date/datetime, before applying -n (default timezone: UTC).")
     if product in {"polygon", "all"}:
         parser.add_argument("-r", "--radius", required=True, type=positive_radius, metavar="KM", help="Radius in kilometers (km).")
     if product == "all":
@@ -584,7 +604,7 @@ def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
 def run(args: argparse.Namespace) -> None:
     input_path, source_type, source_tag = selected_source(args)
     output_path = args.output or GPSKMLWinnower.default_output_directory()
-    winnower = GPSKMLWinnower(limit=getattr(args, "npts", None))
+    winnower = GPSKMLWinnower(limit=getattr(args, "npts", None), after=getattr(args, "after", None))
     if args.product == "all":
         outputs = winnower.process_all_paths(input_path, output_path, source_type, source_tag, args.radius)
     else:

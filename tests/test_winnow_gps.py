@@ -356,3 +356,49 @@ def test_oversize_prevents_output_and_invalid_limit_is_rejected(tmp_path: Path) 
 def test_limit_option_is_no_longer_accepted() -> None:
     with pytest.raises(SystemExit, match="2"):
         cli.main(["trajectory", "--kml", "input.kml", "--limit", "2"])
+
+
+@pytest.mark.parametrize('product', ['trajectory', 'points'])
+@pytest.mark.parametrize('limit,expected', [(None, ['20,2,0', '30,3,0']), (1, ['30,3,0'])])
+def test_after_filters_exclusively_before_limit(tmp_path, product, limit, expected):
+    w = winnow_gps.GPSKMLWinnower(limit=limit, after=datetime(2024, 1, 1))
+    _, data = w.prepare_product_from_records(
+        w.ordered_unique_records(records()), 'P0021', 'vit', 'vit', product,
+        tmp_path, '/input', GENERATED_UTC,
+    )
+    root = parse(data)
+    coords = [coord for element in root.findall('.//k:coordinates', NS) for coord in element.text.split()]
+    assert coords == expected
+    assert root.findtext('.//k:Data[@name="after"]/k:value', namespaces=NS) == '2024-01-01T00:00:00Z'
+
+
+@pytest.mark.parametrize('value', ['2024-01-01', '2024-01-01T00:00:00Z', '2023-12-31T19:00:00-05:00'])
+def test_after_parses_utc_cutoff(value):
+    assert winnow_gps.parse_after(value) == datetime(2024, 1, 1)
+
+
+@pytest.mark.parametrize('product', ['trajectory', 'points'])
+def test_after_cli_filters_and_empty_selection_does_not_write(tmp_path, product):
+    source = tmp_path / 'P0021.vit'
+    source.write_text('20240101-00h00mn00: N01deg00mn, E010deg00mn\n20240102-00h00mn00: N02deg00mn, E020deg00mn\n')
+    output = tmp_path / 'result.kml'
+    cli.main([product, '--vit', str(source), '--after', '2024-01-01', '-o', str(output)])
+    assert parse(output.read_bytes()).findtext('.//k:coordinates', namespaces=NS) == '20.000000,2.000000,0'
+    original = output.read_bytes()
+    with pytest.raises(RuntimeError, match='No GPS fixes strictly after'):
+        cli.main([product, '--vit', str(source), '--after', '2024-01-02', '-o', str(output)])
+    assert output.read_bytes() == original
+
+
+def test_after_rejects_invalid_cli_date():
+    with pytest.raises(SystemExit, match='2'):
+        cli.main(['trajectory', '--vit', '/input', '--after', 'not-a-date'])
+
+
+def test_after_size_limit_uses_filtered_history(tmp_path):
+    w = winnow_gps.GPSKMLWinnower(after=datetime(2024, 1, 1))
+    filtered = w.ordered_unique_records(records())[1:]
+    single = w.render_kml_bytes(filtered[-1:], 'P0021', 'vit', '/input', 'trajectory', GENERATED_UTC)
+    w.max_kml_bytes = len(single)
+    with pytest.raises(winnow_gps.KMLSizeError, match='Maximum GPS points: 1'):
+        w.prepare_product_from_records(w.ordered_unique_records(records()), 'P0021', 'vit', 'vit', 'trajectory', tmp_path, '/input', GENERATED_UTC)

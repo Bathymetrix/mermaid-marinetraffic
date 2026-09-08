@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## Unreleased
 
+### Added
+- Added exclusive ISO date/datetime `--after` filtering to `trajectory` and `points`, before recent-N selection, with UTC cutoff provenance.
+
+### Changed
+- Bumped the package version to 0.7.0 for the new date-filter option.
+
 ### Changed
 - Bumped the package version to 0.3.0 for separated geometry products and the new polygon CLI.
 - Made trajectory KML LineString-only; the latest-position Point is now available through the separate `points` product.

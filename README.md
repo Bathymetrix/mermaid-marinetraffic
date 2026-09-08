@@ -162,3 +162,25 @@ Polygon KML also records `radius_km`. Its spherical destination-point ring has
 the first coordinate again to close the LinearRing (37 serialized coordinates).
 The `all` command writes these normal product-explicit filenames separately; it
 never creates a combined KML file.
+
+### Filter trajectory or points by date
+
+`trajectory` and `points` accept `--after` with an ISO date or datetime.
+Only fixes strictly later than the cutoff are included; a fix exactly at the
+cutoff is excluded. Date-only values mean midnight UTC, timezone-free datetimes
+are interpreted as UTC, and explicit timezone offsets are converted to UTC.
+Source timestamps without timezone information are treated as UTC.
+Filtering happens before `-n` / `--npts` selects the most recent fixes.
+If no fixes remain, the command reports an error without writing that product.
+The normalized exclusive cutoff is recorded in KML metadata as `after`.
+`polygon` and `all` do not accept this option.
+
+```bash
+mermaid-marinetraffic trajectory \
+  --vit "$MERMAID/server_everyone/452.020-P-23.vit" \
+  --after 2018-09-12T02:04:14
+
+mermaid-marinetraffic points \
+  --vit "$MERMAID/server_everyone/452.020-P-23.vit" \
+  --after 2018-09-12 -n 10
+```
