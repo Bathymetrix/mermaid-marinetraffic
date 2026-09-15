@@ -184,3 +184,9 @@ mermaid-marinetraffic points \
   --vit "$MERMAID/server_everyone/452.020-P-23.vit" \
   --after 2018-09-12 -n 10
 ```
+
+Developed and maintained by [Bathymetrix®](https://bathymetrix.com).
+
+© 2026 Bathymetrix, LLC
+
+Licensed under the MIT License.

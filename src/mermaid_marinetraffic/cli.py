@@ -1,3 +1,9 @@
+# Bathymetrix®
+# https://bathymetrix.com
+# © 2026 Bathymetrix, LLC
+# Author: Joel D. Simon <jdsimon@bathymetrix.com>
+# SPDX-License-Identifier: MIT
+
 """Top-level command dispatcher for mermaid-marinetraffic."""
 
 from __future__ import annotations
