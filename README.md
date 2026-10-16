@@ -28,12 +28,12 @@ per selected GPS fix, with the established station/timestamp names. When
 `<STATION> latest position - <timestamp>`.
 
 `polygon` writes exactly one Polygon: a 36-vertex geodesic pseudo-circle around
-the latest valid deduplicated GPS fix. It requires `-r` / `--radius` in
+the latest valid deduplicated GPS fix. It defaults to a 100 km radius; override with `-r` / `--radius` in
 kilometers and does not accept `-n` / `--npts`.
 
 `all` is a convenience command that writes the same three products as
-`trajectory`, `points`, and `polygon`, each to its own KML file. It requires a
-radius in kilometers; `-n N` / `--npts N` applies to trajectory and points only, while
+`trajectory`, `points`, and `polygon`, each to its own KML file. Its polygon radius defaults to 100 km and can be overridden with
+`-r` / `--radius` in kilometers; `-n N` / `--npts N` applies to trajectory and points only, while
 polygon remains centered on the latest deduplicated source fix. Its `-o` value
 is an output directory because it writes three files.
 

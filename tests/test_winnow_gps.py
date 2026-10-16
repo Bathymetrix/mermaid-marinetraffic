@@ -44,14 +44,16 @@ def test_top_level_help_version_and_product_commands(capsys: pytest.CaptureFixtu
         cli.main(["polygon", "--help"])
     polygon_help = capsys.readouterr().out
     assert "-r, --radius KM" in polygon_help
-    assert "kilometers (km)" in polygon_help
+    assert "Polygon radius in kilometers (km)" in polygon_help
+    assert "applies only to the polygon product" in " ".join(polygon_help.split())
     assert "--npts" not in polygon_help
     with pytest.raises(SystemExit, match="0"):
         cli.main(["all", "--help"])
     all_help = capsys.readouterr().out
     assert "separate trajectory, points, and polygon KML files" in all_help
     assert "-r, --radius KM" in all_help
-    assert "kilometers (km)" in all_help
+    assert "Polygon radius in kilometers (km)" in all_help
+    assert "applies only to the polygon product" in " ".join(all_help.split())
     assert "-n, --npts N" in all_help
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--version"])
@@ -301,10 +303,8 @@ def test_all_command_writes_three_separate_geometry_products(tmp_path: Path, opt
     assert polygon_metadata["gps_points"] != "2"
 
 
-def test_all_requires_radius_and_directory_output(tmp_path: Path) -> None:
+def test_all_requires_directory_output(tmp_path: Path) -> None:
     source = str(FIXTURES / "log_gps_records.452.020-P-21.jsonl")
-    with pytest.raises(SystemExit, match="2"):
-        cli.main(["all", "--jsonl", source])
     with pytest.raises(RuntimeError, match="requires -o to be a directory"):
         cli.main(["all", "--jsonl", source, "-r", "1000", "-o", str(tmp_path / "combined.kml")])
 
@@ -402,3 +402,15 @@ def test_after_size_limit_uses_filtered_history(tmp_path):
     w.max_kml_bytes = len(single)
     with pytest.raises(winnow_gps.KMLSizeError, match='Maximum GPS points: 1'):
         w.prepare_product_from_records(w.ordered_unique_records(records()), 'P0021', 'vit', 'vit', 'trajectory', tmp_path, '/input', GENERATED_UTC)
+
+
+@pytest.mark.parametrize("product", ["polygon", "all"])
+def test_default_radius_matches_explicit_100_km(tmp_path, product):
+    source = tmp_path / "P0021.vit"
+    source.write_text("20240101-00h00mn00: N01deg00mn, E010deg00mn\n")
+    for directory, options in [("default", []), ("explicit", ["--radius", "100"])]:
+        cli.main([product, "--vit", str(source), "-o", str(tmp_path / directory), *options])
+    roots = [ET.parse(tmp_path / directory / "gps_polygon_P0021_src-vit.kml").getroot()
+             for directory in ("default", "explicit")]
+    assert roots[0].findtext('.//k:Data[@name="radius_km"]/k:value', namespaces=NS) == "100"
+    assert roots[0].findtext('.//k:coordinates', namespaces=NS) == roots[1].findtext('.//k:coordinates', namespaces=NS)

@@ -10,6 +10,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Added exclusive ISO date/datetime `--after` filtering to `trajectory` and `points`, before recent-N selection, with UTC cutoff provenance.
 
 ### Changed
+- Default the polygon radius to 100 km for `polygon` and `all`, retaining explicit `-r` / `--radius` overrides; clarify in CLI help that the radius applies only to the polygon around the latest GPS fix and show the default.
+- Bumped the package version to 0.8.0 for the combined radius default and help update.
 - Bumped the package version to 0.7.0 for the new date-filter option.
 
 ### Changed

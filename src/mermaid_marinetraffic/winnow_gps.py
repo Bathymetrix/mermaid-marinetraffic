@@ -584,7 +584,7 @@ def configure_parser(parser: argparse.ArgumentParser, product: str) -> None:
     if product in {"trajectory", "points"}:
         parser.add_argument("--after", type=parse_after, metavar="DATETIME", help="Keep fixes strictly after this ISO date/datetime, before applying -n (default timezone: UTC).")
     if product in {"polygon", "all"}:
-        parser.add_argument("-r", "--radius", required=True, type=positive_radius, metavar="KM", help="Radius in kilometers (km).")
+        parser.add_argument("-r", "--radius", default=100.0, type=positive_radius, metavar="KM", help="Polygon radius in kilometers (km), centered on the latest GPS fix; applies only to the polygon product (default: 100 km).")
     if product == "all":
         parser.description = "Write separate trajectory, points, and polygon KML files."
 
