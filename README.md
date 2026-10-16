@@ -69,7 +69,7 @@ internet connection.
 
 - `--vit PATH`: a MERMAID `<serial_id>.vit` log file.
 - `--kml PATH`: automaid `position.kml`, for example
-  `$MERMAID/processed_everyone/452.020-P-21/position.kml`.
+  `$MERMAID/processed/452.020-P-21/position.kml`.
 - `--eso PATH`: ESO (EarthScope-Oceans) local location file, for example
   `$MERMAID/esoloc/P0021_all.txt`.
 - `--jsonl PATH`: mermaid-records GPS JSONL, for example
@@ -183,26 +183,26 @@ do not accept date selection options.
 
 ```bash
 mermaid-marinetraffic trajectory \
-  --vit "$MERMAID/server_everyone/452.020-P-23.vit" \
+  --vit "$MERMAID/server/452.020-P-23.vit" \
   --after 2018-09-12T02:04:14
 
 mermaid-marinetraffic points \
-  --vit "$MERMAID/server_everyone/452.020-P-23.vit" \
+  --vit "$MERMAID/server/452.020-P-23.vit" \
   --after 2018-09-12 -n 10
 
 # Start at a date and keep the first 100 fixes from that point
 mermaid-marinetraffic trajectory \
-  --vit "$MERMAID/server_everyone/452.020-R-04.vit" \
+  --vit "$MERMAID/server/465.152-R-0004.vit" \
   --from 2018-09-12 -n 100
 
 # Work backwards from an end date and keep the 100 most recent earlier fixes
 mermaid-marinetraffic trajectory \
-  --vit "$MERMAID/server_everyone/452.020-R-04.vit" \
+  --vit "$MERMAID/server/465.152-R-0004.vit" \
   --to 2018-10-01 -n 100
 
 # Keep fixes in a date range
 mermaid-marinetraffic trajectory \
-  --vit "$MERMAID/server_everyone/452.020-R-04.vit" \
+  --vit "$MERMAID/server/465.152-R-0004.vit" \
   --between 2018-09-01 2018-10-01
 ```
 
