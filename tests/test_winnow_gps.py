@@ -39,6 +39,9 @@ def test_top_level_help_version_and_product_commands(capsys: pytest.CaptureFixtu
             cli.main([command, "--help"])
         command_help = capsys.readouterr().out
         assert "-n, --npts N" in command_help
+        assert "--between START END" in command_help
+        assert "--from DATETIME" in command_help
+        assert "--to DATETIME" in command_help
         assert "--limit" not in command_help
     with pytest.raises(SystemExit, match="0"):
         cli.main(["polygon", "--help"])
@@ -385,7 +388,7 @@ def test_after_cli_filters_and_empty_selection_does_not_write(tmp_path, product)
     cli.main([product, '--vit', str(source), '--after', '2024-01-01', '-o', str(output)])
     assert parse(output.read_bytes()).findtext('.//k:coordinates', namespaces=NS) == '20.000000,2.000000,0'
     original = output.read_bytes()
-    with pytest.raises(RuntimeError, match='No GPS fixes strictly after'):
+    with pytest.raises(RuntimeError, match='No GPS fixes match the requested date selection'):
         cli.main([product, '--vit', str(source), '--after', '2024-01-02', '-o', str(output)])
     assert output.read_bytes() == original
 
@@ -414,3 +417,50 @@ def test_default_radius_matches_explicit_100_km(tmp_path, product):
              for directory in ("default", "explicit")]
     assert roots[0].findtext('.//k:Data[@name="radius_km"]/k:value', namespaces=NS) == "100"
     assert roots[0].findtext('.//k:coordinates', namespaces=NS) == roots[1].findtext('.//k:coordinates', namespaces=NS)
+
+
+@pytest.mark.parametrize("product", ["trajectory", "points"])
+def test_between_keeps_inclusive_chronological_range(tmp_path, product):
+    w = winnow_gps.GPSKMLWinnower(between=(datetime(2024, 1, 1), datetime(2024, 1, 2)))
+    _, data = w.prepare_product_from_records(
+        w.ordered_unique_records(records()), "P0021", "vit", "vit", product,
+        tmp_path, "/input", GENERATED_UTC,
+    )
+    root = parse(data)
+    coords = [coord for element in root.findall(".//k:coordinates", NS) for coord in element.text.split()]
+    assert coords == ["10,1,0", "20,2,0"]
+    assert root.findtext('.//k:Data[@name="between_start"]/k:value', namespaces=NS) == "2024-01-01T00:00:00Z"
+    assert root.findtext('.//k:Data[@name="between_end"]/k:value', namespaces=NS) == "2024-01-02T00:00:00Z"
+
+
+@pytest.mark.parametrize("product", ["trajectory", "points"])
+def test_from_with_npts_keeps_first_n_at_or_after_start(tmp_path, product):
+    cli.main([product, "--eso", str(FIXTURES / "P0021_all.txt"), "--from", "2018-01-01", "-n", "1", "-o", str(tmp_path / "result.kml")])
+    root = parse((tmp_path / "result.kml").read_bytes())
+    coords = [coord for element in root.findall(".//k:coordinates", NS) for coord in element.text.split()]
+    assert len(coords) == 1
+    assert coords[0] == "-133.321800,-23.647167,0"
+    assert root.findtext('.//k:Data[@name="from"]/k:value', namespaces=NS) == "2018-01-01T00:00:00Z"
+    assert root.findtext('.//k:Data[@name="limit_order"]/k:value', namespaces=NS) == "earliest"
+
+
+def test_from_requires_npts_and_between_validates_order(tmp_path):
+    source = str(FIXTURES / "P0021_all.txt")
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["trajectory", "--eso", source, "--from", "2024-01-01"])
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["trajectory", "--eso", source, "--between", "2024-01-02", "2024-01-01"])
+
+
+@pytest.mark.parametrize("product", ["trajectory", "points"])
+def test_to_with_npts_keeps_last_n_at_or_before_date(tmp_path, product):
+    cli.main([product, "--eso", str(FIXTURES / "P0021_all.txt"), "--to", "2018-09-10T18:00:00", "-n", "2", "-o", str(tmp_path / "result.kml")])
+    root = parse((tmp_path / "result.kml").read_bytes())
+    coords = [coord for element in root.findall(".//k:coordinates", NS) for coord in element.text.split()]
+    assert coords == ["-133.321800,-23.647167,0", "-133.350067,-23.637183,0"]
+    assert root.findtext('.//k:Data[@name="to"]/k:value', namespaces=NS) == "2018-09-10T18:00:00Z"
+
+
+def test_to_requires_npts(tmp_path):
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["trajectory", "--eso", str(FIXTURES / "P0021_all.txt"), "--to", "2018-09-10"])

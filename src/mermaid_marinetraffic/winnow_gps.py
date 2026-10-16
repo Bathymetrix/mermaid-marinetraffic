@@ -46,9 +46,12 @@ class KMLSizeError(RuntimeError):
 
 
 class GPSKMLWinnower:
-    def __init__(self, limit: int | None = None, max_kml_bytes: int = MARINETRAFFIC_MAX_KML_BYTES, after: datetime | None = None) -> None:
+    def __init__(self, limit: int | None = None, max_kml_bytes: int = MARINETRAFFIC_MAX_KML_BYTES, after: datetime | None = None, between: tuple[datetime, datetime] | None = None, from_start: datetime | None = None, to_end: datetime | None = None) -> None:
         self.limit = limit
         self.after = after
+        self.between = between
+        self.from_start = from_start
+        self.to_end = to_end
         self.max_kml_bytes = max_kml_bytes
         ET.register_namespace("", KML_NS)
         ET.register_namespace("gx", GX_NS)
@@ -151,7 +154,9 @@ class GPSKMLWinnower:
     def select_records(self, records: list[PositionRecord]) -> list[PositionRecord]:
         """Retain the configured number of most-recent unique GPS fixes."""
         ordered = self.ordered_unique_records(records)
-        return ordered if self.limit is None else ordered[-self.limit:]
+        if self.limit is None:
+            return ordered
+        return ordered[:self.limit] if self.from_start is not None else ordered[-self.limit:]
 
     def parse_kml(self, input_path: Path) -> tuple[str, list[PositionRecord]]:
         root = ET.parse(input_path).getroot()
@@ -359,8 +364,17 @@ class GPSKMLWinnower:
             "gps_points": str(len(records)),
             "limit": "all" if self.limit is None else str(self.limit),
         }
-        if self.after is not None and product in {"trajectory", "points"}:
-            metadata["after"] = self.after.isoformat() + "Z"
+        if product in {"trajectory", "points"}:
+            if self.after is not None:
+                metadata["after"] = self.after.isoformat() + "Z"
+            if self.between is not None:
+                metadata["between_start"] = self.between[0].isoformat() + "Z"
+                metadata["between_end"] = self.between[1].isoformat() + "Z"
+            if self.from_start is not None:
+                metadata["from"] = self.from_start.isoformat() + "Z"
+                metadata["limit_order"] = "earliest"
+            if self.to_end is not None:
+                metadata["to"] = self.to_end.isoformat() + "Z"
         if product == "polygon":
             if radius_km is None:
                 raise ValueError("polygon rendering requires radius_km")
@@ -399,7 +413,8 @@ class GPSKMLWinnower:
         low, high, best = 1, len(all_records), 0
         while low <= high:
             candidate = (low + high) // 2
-            data = self.render_kml_bytes(all_records[-candidate:], station, source_type, source_ref, product, generated_utc)
+            candidate_records = all_records[:candidate] if self.from_start is not None else all_records[-candidate:]
+            data = self.render_kml_bytes(candidate_records, station, source_type, source_ref, product, generated_utc)
             if len(data) <= self.max_kml_bytes:
                 best = candidate
                 low = candidate + 1
@@ -435,10 +450,18 @@ class GPSKMLWinnower:
 
     def prepare_product_from_records(self, all_records: list[PositionRecord], station: str, source_type: str, source_tag: str, product: str, output_path: Path, source_ref: str, generated_utc: str, radius_km: float | None = None) -> tuple[Path, bytes]:
         """Render one product from already parsed and deduplicated records."""
-        if self.after is not None and product in {"trajectory", "points"}:
-            all_records = [record for record in all_records if record.timestamp > self.after]
+        if product in {"trajectory", "points"}:
+            if self.after is not None:
+                all_records = [record for record in all_records if record.timestamp > self.after]
+            elif self.between is not None:
+                start, end = self.between
+                all_records = [record for record in all_records if start <= record.timestamp <= end]
+            elif self.from_start is not None:
+                all_records = [record for record in all_records if record.timestamp >= self.from_start]
+            elif self.to_end is not None:
+                all_records = [record for record in all_records if record.timestamp <= self.to_end]
             if not all_records:
-                raise RuntimeError(f"No GPS fixes strictly after {self.after.isoformat()}Z in {source_ref}")
+                raise RuntimeError(f"No GPS fixes match the requested date selection in {source_ref}")
         selected_records = all_records if product == "polygon" else self.select_records(all_records)
         if not selected_records:
             raise RuntimeError(f"No valid GPS fixes found in {source_ref}")
@@ -579,10 +602,15 @@ def configure_parser(parser: argparse.ArgumentParser, product: str) -> None:
         else "Output file or directory (default: $MERMAID/marinetraffic)"
     )
     parser.add_argument("-o", "--output", type=Path, help=output_help)
-    if product in {"trajectory", "points", "all"}:
+    if product == "all":
         parser.add_argument("-n", "--npts", type=positive_npts, metavar="N", help="Use only the N most recent unique GPS fixes (default: all available fixes).")
     if product in {"trajectory", "points"}:
-        parser.add_argument("--after", type=parse_after, metavar="DATETIME", help="Keep fixes strictly after this ISO date/datetime, before applying -n (default timezone: UTC).")
+        date_selection = parser.add_mutually_exclusive_group()
+        date_selection.add_argument("--after", type=parse_after, metavar="DATETIME", help="Keep fixes strictly after this ISO date/datetime; -n keeps the most recent fixes (default timezone: UTC).")
+        date_selection.add_argument("--between", type=parse_after, nargs=2, metavar=("START", "END"), help="Keep fixes within this inclusive ISO datetime range; -n keeps the most recent fixes (default timezone: UTC).")
+        date_selection.add_argument("--from", dest="from_start", type=parse_after, metavar="DATETIME", help="With -n, keep the first N fixes at or after this ISO date/datetime (default timezone: UTC).")
+        date_selection.add_argument("--to", dest="to_end", type=parse_after, metavar="DATETIME", help="With -n, keep the last N fixes at or before this ISO date/datetime (default timezone: UTC).")
+        parser.add_argument("-n", "--npts", type=positive_npts, metavar="N", help="Use the N most recent unique fixes; with --from keep the first N at/after the date, or with --to the last N at/before it.")
     if product in {"polygon", "all"}:
         parser.add_argument("-r", "--radius", default=100.0, type=positive_radius, metavar="KM", help="Polygon radius in kilometers (km), centered on the latest GPS fix; applies only to the polygon product (default: 100 km).")
     if product == "all":
@@ -604,7 +632,7 @@ def selected_source(args: argparse.Namespace) -> tuple[Path, str, str]:
 def run(args: argparse.Namespace) -> None:
     input_path, source_type, source_tag = selected_source(args)
     output_path = args.output or GPSKMLWinnower.default_output_directory()
-    winnower = GPSKMLWinnower(limit=getattr(args, "npts", None), after=getattr(args, "after", None))
+    winnower = GPSKMLWinnower(limit=getattr(args, "npts", None), after=getattr(args, "after", None), between=getattr(args, "between", None), from_start=getattr(args, "from_start", None), to_end=getattr(args, "to_end", None))
     if args.product == "all":
         outputs = winnower.process_all_paths(input_path, output_path, source_type, source_tag, args.radius)
     else:

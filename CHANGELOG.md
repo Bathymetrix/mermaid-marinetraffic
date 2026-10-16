@@ -7,6 +7,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## Unreleased
 
 ### Added
+- Added inclusive `--between START END` filtering, `--from DATE -n N` forward selection, and `--to DATE -n N` backward selection for trajectory and points.
+
+### Changed
+- Bumped the package version to 0.9.0 for date ranges and forward point selection.
+- Clarified that `-n` selects the most recent fixes except with `--from` (first N at/after its date) or `--to` (last N at/before its date).
+
+### Added
 - Added exclusive ISO date/datetime `--after` filtering to `trajectory` and `points`, before recent-N selection, with UTC cutoff provenance.
 
 ### Changed

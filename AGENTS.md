@@ -27,7 +27,7 @@ If instructions conflict, this file takes precedence.
 
 - Product commands are `trajectory`, `points`, `polygon`, and `all`; `all` writes the three normal product files separately.
 - Input source options accept a file or recursively discovered directory input.
-- Trajectory defaults to complete valid, adjacent-deduplicated history. `-n` / `--npts` means most-recent unique GPS fixes.
+- Trajectory defaults to complete valid, adjacent-deduplicated history. `-n` / `--npts` means most-recent unique GPS fixes except with `--from` (first N at or after the start) and `--to` (last N at or before the end).
 - MarineTraffic KML must not exceed 400,000 serialized bytes. Never silently truncate oversized history; report the exact maximum fitting `-n`.
 - Generated KML files must contain exactly one geometry type because empirical MarineTraffic mixed-geometry imports have behaved inconsistently: trajectory is LineString-only, points is Point-only, and polygon is Polygon-only.
 - Polygon uses a kilometer radius defaulting to 100 km and a 36-vertex geodesic ring plus its repeated closing coordinate. Source parsing and normalization are shared across products.

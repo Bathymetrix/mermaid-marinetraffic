@@ -33,4 +33,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if not hasattr(args, "handler"):
         parser.error("a command is required")
+    if getattr(args, "between", None) is not None and args.between[0] > args.between[1]:
+        parser.error("--between START must be earlier than or equal to END")
+    if (getattr(args, "from_start", None) is not None or getattr(args, "to_end", None) is not None) and getattr(args, "npts", None) is None:
+        parser.error("--from and --to require -n/--npts")
     args.handler(args)

@@ -165,15 +165,21 @@ never creates a combined KML file.
 
 ### Filter trajectory or points by date
 
-`trajectory` and `points` accept `--after` with an ISO date or datetime.
-Only fixes strictly later than the cutoff are included; a fix exactly at the
-cutoff is excluded. Date-only values mean midnight UTC, timezone-free datetimes
-are interpreted as UTC, and explicit timezone offsets are converted to UTC.
-Source timestamps without timezone information are treated as UTC.
-Filtering happens before `-n` / `--npts` selects the most recent fixes.
-If no fixes remain, the command reports an error without writing that product.
-The normalized exclusive cutoff is recorded in KML metadata as `after`.
-`polygon` and `all` do not accept this option.
+`trajectory` and `points` accept three mutually exclusive ISO date selection
+options. Date-only values mean midnight UTC, timezone-free datetimes mean UTC,
+explicit offsets are converted to UTC, and source timestamps without timezone
+information are treated as UTC.
+
+- `--after DATETIME` keeps fixes strictly after the cutoff; `-n N` then keeps
+the most recent N fixes.
+- `--between START END` keeps fixes in the inclusive instant range; `-n N`
+then keeps the most recent N fixes in that range.
+- `--from DATETIME -n N` keeps the first N fixes at or after the start time.
+- `--to DATETIME -n N` keeps the last N fixes at or before the end time.
+
+If no fixes match, the command reports an error without writing that product.
+The selected date bound(s) are recorded in KML metadata. `polygon` and `all`
+do not accept date selection options.
 
 ```bash
 mermaid-marinetraffic trajectory \
@@ -183,6 +189,21 @@ mermaid-marinetraffic trajectory \
 mermaid-marinetraffic points \
   --vit "$MERMAID/server_everyone/452.020-P-23.vit" \
   --after 2018-09-12 -n 10
+
+# Start at a date and keep the first 100 fixes from that point
+mermaid-marinetraffic trajectory \
+  --vit "$MERMAID/server_everyone/452.020-R-04.vit" \
+  --from 2018-09-12 -n 100
+
+# Work backwards from an end date and keep the 100 most recent earlier fixes
+mermaid-marinetraffic trajectory \
+  --vit "$MERMAID/server_everyone/452.020-R-04.vit" \
+  --to 2018-10-01 -n 100
+
+# Keep fixes in a date range
+mermaid-marinetraffic trajectory \
+  --vit "$MERMAID/server_everyone/452.020-R-04.vit" \
+  --between 2018-09-01 2018-10-01
 ```
 
 Developed and maintained by [Bathymetrix®](https://bathymetrix.com).
